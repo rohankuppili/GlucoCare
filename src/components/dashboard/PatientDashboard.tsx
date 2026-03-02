@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Activity, 
@@ -22,7 +22,6 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { 
   mockPatient, 
-  mockGlucoseReadings, 
   mockAlerts, 
   mockHealthInsights,
   mockVitalReadings,
@@ -33,6 +32,8 @@ import GlucoseChart from '@/components/charts/GlucoseChart';
 import MetricCard from '@/components/dashboard/MetricCard';
 import AlertsPanel from '@/components/dashboard/AlertsPanel';
 import InsightsPanel from '@/components/dashboard/InsightsPanel';
+import { useAuthUser } from '@/hooks/useAuthUser';
+import { listGlucoseReadings, type GlucoseReadingDoc } from '@/lib/firestore';
 
 interface PatientDashboardProps {
   onLogout: () => void;
@@ -40,9 +41,59 @@ interface PatientDashboardProps {
 
 const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
   const [activeTab, setActiveTab] = useState<'overview' | 'glucose' | 'diet' | 'activity'>('overview');
-  const stats = calculateGlucoseStats(mockGlucoseReadings);
-  const latestGlucose = mockGlucoseReadings[mockGlucoseReadings.length - 1];
-  const glucoseStatus = getGlucoseStatus(latestGlucose.value);
+  const { user } = useAuthUser();
+  const [glucoseReadings, setGlucoseReadings] = useState<GlucoseReadingDoc[]>([]);
+  const [glucoseLoading, setGlucoseLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function load() {
+      if (!user) return;
+      setGlucoseLoading(true);
+      const readings = await listGlucoseReadings(user.uid);
+      if (cancelled) return;
+      setGlucoseReadings(readings);
+      setGlucoseLoading(false);
+    }
+
+    load();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
+
+  const stats = useMemo(() => {
+    const converted = glucoseReadings.map((r) => ({
+      id: r.id,
+      patientId: user?.uid ?? "",
+      value: r.value,
+      unit: r.unit,
+      type: r.type,
+      timestamp: r.timestamp.toISOString(),
+      notes: r.notes,
+    }));
+    return calculateGlucoseStats(converted);
+  }, [glucoseReadings, user?.uid]);
+
+  const latestGlucose = glucoseReadings[0];
+  const glucoseStatus = latestGlucose ? getGlucoseStatus(latestGlucose.value) : 'normal';
+
+  const chartReadings = useMemo(() => {
+    return glucoseReadings
+      .slice()
+      .reverse()
+      .map((r) => ({
+        id: r.id,
+        patientId: user?.uid ?? "",
+        value: r.value,
+        unit: r.unit,
+        type: r.type,
+        timestamp: r.timestamp.toISOString(),
+        notes: r.notes,
+      }));
+  }, [glucoseReadings, user?.uid]);
 
   const getGreeting = () => {
     const hour = new Date().getHours();
@@ -124,7 +175,7 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
                       glucoseStatus === 'high' || glucoseStatus === 'critical' ? 'text-danger' :
                       'text-glucose-low'
                     }`}>
-                      {latestGlucose.value}
+                      {latestGlucose?.value ?? '--'}
                     </span>
                     <span className="text-2xl text-muted-foreground">mg/dL</span>
                   </div>
@@ -154,7 +205,7 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
                     Log New Reading
                   </Button>
                   <p className="text-sm text-muted-foreground text-center">
-                    Last updated: {new Date(latestGlucose.timestamp).toLocaleTimeString()}
+                    Last updated: {latestGlucose ? latestGlucose.timestamp.toLocaleTimeString() : '--'}
                   </p>
                 </div>
               </div>
@@ -261,7 +312,7 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
                 </div>
               </CardHeader>
               <CardContent>
-                <GlucoseChart readings={mockGlucoseReadings.slice(-28)} />
+                <GlucoseChart readings={chartReadings.slice(-28)} />
               </CardContent>
             </Card>
           </motion.div>

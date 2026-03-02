@@ -7,28 +7,29 @@ import LoginForm from '@/components/auth/LoginForm';
 import PatientDashboard from '@/components/dashboard/PatientDashboard';
 import FamilyDashboard from '@/components/dashboard/FamilyDashboard';
 import DoctorDashboard from '@/components/dashboard/DoctorDashboard';
+import { auth, googleProvider } from '@/lib/firebase';
+import { signInWithPopup, signOut } from 'firebase/auth';
+import { useAuthUser } from '@/hooks/useAuthUser';
 
 type AppView = 'landing' | 'login' | 'dashboard';
 
 const Index = () => {
   const [currentView, setCurrentView] = useState<AppView>('landing');
   const [selectedRole, setSelectedRole] = useState<UserRole | null>(null);
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const { user } = useAuthUser();
 
   const handleSelectRole = (role: UserRole) => {
     setSelectedRole(role);
     setCurrentView('login');
   };
 
-  const handleLogin = (credentials: { id: string; password: string }) => {
-    // Demo login - in production, this would validate against a backend
-    console.log('Login attempt:', credentials);
-    setIsAuthenticated(true);
+  const handleLogin = async () => {
+    await signInWithPopup(auth, googleProvider);
     setCurrentView('dashboard');
   };
 
-  const handleLogout = () => {
-    setIsAuthenticated(false);
+  const handleLogout = async () => {
+    await signOut(auth);
     setSelectedRole(null);
     setCurrentView('landing');
   };
@@ -54,7 +55,7 @@ const Index = () => {
   }
 
   // Render dashboard based on role
-  if (currentView === 'dashboard' && isAuthenticated && selectedRole) {
+  if (currentView === 'dashboard' && !!user && selectedRole) {
     switch (selectedRole) {
       case 'patient':
         return <PatientDashboard onLogout={handleLogout} />;
