@@ -13,6 +13,7 @@ import {
   Footprints,
   Clock,
   Calendar,
+  FileText,
   ChevronRight,
   Phone,
   LogOut,
@@ -29,12 +30,9 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { 
-  mockPatient, 
-  mockAlerts, 
-  mockHealthInsights,
   calculateGlucoseStats 
-} from '@/data/mockData';
-import { getGlucoseStatus } from '@/types';
+} from '@/lib/metrics';
+import { getGlucoseStatus, type Alert, type HealthInsight } from '@/types';
 import GlucoseChart from '@/components/charts/GlucoseChart';
 import HbA1cChart from '@/components/charts/HbA1cChart';
 import VitalsTrendChart from '@/components/charts/VitalsTrendChart';
@@ -48,9 +46,11 @@ import {
   createAppointmentRequest,
   listAvailableAppointmentSlotsForDoctor,
   listAppointmentsForPatient,
+  listCarePlansForPatient,
   listDailyHealthMetrics,
   listNotifications,
   type AppointmentDoc,
+  type DoctorCarePlanDoc,
   type DailyHealthMetricsDoc,
   type NotificationDoc,
   type TimeSlotOption,
@@ -72,6 +72,7 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
   const [dailyMetricsLoading, setDailyMetricsLoading] = useState(true);
   const [appointments, setAppointments] = useState<AppointmentDoc[]>([]);
   const [notifications, setNotifications] = useState<NotificationDoc[]>([]);
+  const [doctorCarePlans, setDoctorCarePlans] = useState<DoctorCarePlanDoc[]>([]);
   const [doctorDetails, setDoctorDetails] = useState<{ uid: string; doctorId: string; name: string } | null>(null);
   const [appointmentDate, setAppointmentDate] = useState(() => new Date().toISOString().split('T')[0]);
   const [appointmentTime, setAppointmentTime] = useState("");
@@ -107,13 +108,15 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
     async function loadAppointmentData() {
       if (!user) return;
       try {
-        const [appointmentItems, notificationItems] = await Promise.all([
+        const [appointmentItems, notificationItems, carePlanItems] = await Promise.all([
           listAppointmentsForPatient(user.uid),
           listNotifications(user.uid),
+          listCarePlansForPatient(user.uid),
         ]);
         if (!cancelled) {
           setAppointments(appointmentItems);
           setNotifications(notificationItems);
+          setDoctorCarePlans(carePlanItems);
         }
       } catch (error) {
         if (!cancelled) toast.error("Failed to load appointment data.");
@@ -212,6 +215,64 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
         timestamp: `${m.date}T09:00:00`,
       }));
   }, [dailyMetrics, patientProfile?.patientId, user?.uid]);
+
+  const panelAlerts = useMemo<Alert[]>(() => {
+    const patientId = patientProfile?.patientId ?? user?.uid ?? "";
+    return notifications.map((n) => ({
+      id: n.id,
+      patientId,
+      type: "appointment",
+      severity: n.status === "rejected" ? "warning" : "info",
+      title: n.title,
+      message: n.message,
+      timestamp: n.createdAt.toISOString(),
+      isRead: n.isRead,
+      isAcknowledged: false,
+    }));
+  }, [notifications, patientProfile?.patientId, user?.uid]);
+
+  const derivedInsights = useMemo<HealthInsight[]>(() => {
+    const patientId = patientProfile?.patientId ?? user?.uid ?? "";
+    const items: HealthInsight[] = [];
+
+    if (stats.readings > 0) {
+      items.push({
+        id: "insight-glucose-trend",
+        patientId,
+        type: "trend",
+        category: "glucose",
+        title: "Glucose Summary",
+        description: `Average ${stats.average} mg/dL with ${stats.inRangePercentage}% in target range.`,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    if (latestDaily?.bloodPressureSystolic && latestDaily?.bloodPressureDiastolic) {
+      items.push({
+        id: "insight-bp",
+        patientId,
+        type: "recommendation",
+        category: "lifestyle",
+        title: "Latest Blood Pressure",
+        description: `Most recent BP is ${latestDaily.bloodPressureSystolic}/${latestDaily.bloodPressureDiastolic} mmHg.`,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    if (latestDaily?.heartRate) {
+      items.push({
+        id: "insight-bpm",
+        patientId,
+        type: "trend",
+        category: "lifestyle",
+        title: "Latest Heart Rate",
+        description: `Most recent heart rate is ${latestDaily.heartRate} bpm.`,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    return items;
+  }, [latestDaily?.bloodPressureDiastolic, latestDaily?.bloodPressureSystolic, latestDaily?.heartRate, patientProfile?.patientId, stats.average, stats.inRangePercentage, stats.readings, user?.uid]);
 
   useEffect(() => {
     let cancelled = false;
@@ -587,6 +648,88 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
           </Card>
         </motion.div>
 
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.38 }}
+          className="mb-8"
+        >
+          <Card variant="glass">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <FileText className="w-5 h-5 text-primary" />
+                Doctor Updates
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {doctorCarePlans.length === 0 && (
+                <p className="text-sm text-muted-foreground">No doctor updates yet.</p>
+              )}
+              {doctorCarePlans.slice(0, 8).map((plan) => (
+                <div key={plan.id} className="rounded-lg border border-border/60 p-4 space-y-2">
+                  <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-1">
+                    <p className="font-semibold">
+                      {plan.type === "prescription" && "Prescription"}
+                      {plan.type === "diet-plan" && "Diet Plan"}
+                      {plan.type === "exercise-goal" && "Exercise Goals"}
+                      {plan.type === "medical-note" && "Medical Notes"}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {plan.createdAt ? plan.createdAt.toLocaleString() : "Recently added"}
+                    </p>
+                  </div>
+
+                  {plan.type === "prescription" && plan.prescription && (
+                    <div className="space-y-2">
+                      {plan.prescription.medicines.map((med, idx) => (
+                        <div key={`${plan.id}-med-${idx}`} className="rounded-md bg-muted/40 p-3 text-sm">
+                          <p className="font-medium">
+                            {med.name} - {med.dosage}
+                          </p>
+                          <p className="text-muted-foreground">
+                            Morning: {med.morning.replace("-", " ")} | Afternoon: {med.afternoon.replace("-", " ")} | Night: {med.night.replace("-", " ")}
+                          </p>
+                        </div>
+                      ))}
+                      {plan.prescription.comments && (
+                        <p className="text-sm text-muted-foreground">Remarks: {plan.prescription.comments}</p>
+                      )}
+                    </div>
+                  )}
+
+                  {plan.type === "diet-plan" && plan.dietPlan && (
+                    <div className="space-y-2">
+                      <p className="text-sm whitespace-pre-wrap">{plan.dietPlan.text}</p>
+                      <p className="text-sm text-muted-foreground">
+                        Calorie limit: {plan.dietPlan.calorieLimit} kcal/day
+                      </p>
+                      {plan.dietPlan.imageUrl && (
+                        <img
+                          src={plan.dietPlan.imageUrl}
+                          alt="Diet plan"
+                          className="w-full max-w-md rounded-lg border border-border/60"
+                        />
+                      )}
+                    </div>
+                  )}
+
+                  {plan.type === "exercise-goal" && plan.exerciseGoal && (
+                    <p className="text-sm whitespace-pre-wrap">{plan.exerciseGoal.text}</p>
+                  )}
+
+                  {plan.type === "medical-note" && plan.medicalNote && (
+                    <ul className="list-disc pl-5 space-y-1 text-sm">
+                      {plan.medicalNote.items.map((item, idx) => (
+                        <li key={`${plan.id}-note-${idx}`}>{item}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        </motion.div>
+
         {/* Charts and Insights Grid */}
         <div className="grid lg:grid-cols-3 gap-6">
           {/* Glucose Chart - Takes 2 columns */}
@@ -628,7 +771,7 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.5 }}
           >
-            <AlertsPanel alerts={mockAlerts} />
+            <AlertsPanel alerts={panelAlerts} />
           </motion.div>
         </div>
 
@@ -639,7 +782,7 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
           transition={{ delay: 0.6 }}
           className="mt-6"
         >
-          <InsightsPanel insights={mockHealthInsights} />
+          <InsightsPanel insights={derivedInsights} />
         </motion.div>
 
         <motion.div

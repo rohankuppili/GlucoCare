@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import { 
   Users, 
@@ -22,18 +22,22 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { 
-  mockPatient, 
-  mockGlucoseReadings, 
-  mockAlerts, 
   calculateGlucoseStats,
-  mockHealthInsights,
-  mockDoctor
-} from '@/data/mockData';
+} from '@/lib/metrics';
 import { getGlucoseStatus } from '@/types';
 import GlucoseChart from '@/components/charts/GlucoseChart';
 import MetricCard from '@/components/dashboard/MetricCard';
 import { useRoleBasedAuth } from '@/hooks/useRoleBasedAuth';
 import DeleteAccountButton from '@/components/auth/DeleteAccountButton';
+import {
+  listAppointmentsForPatient,
+  listDailyHealthMetrics,
+  listNotifications,
+  type AppointmentDoc,
+  type DailyHealthMetricsDoc,
+  type NotificationDoc,
+} from '@/lib/firestore';
+import { toast } from 'sonner';
 
 interface FamilyDashboardProps {
   onLogout: () => void;
@@ -48,10 +52,74 @@ const nearbyServices = [
 
 const FamilyDashboard = ({ onLogout }: FamilyDashboardProps) => {
   const { loading, linkedPatient } = useRoleBasedAuth();
-  const stats = calculateGlucoseStats(mockGlucoseReadings);
-  const latestGlucose = mockGlucoseReadings[mockGlucoseReadings.length - 1];
-  const glucoseStatus = getGlucoseStatus(latestGlucose.value);
-  const unreadAlerts = mockAlerts.filter(a => !a.isRead);
+  const [dailyMetrics, setDailyMetrics] = useState<DailyHealthMetricsDoc[]>([]);
+  const [notifications, setNotifications] = useState<NotificationDoc[]>([]);
+  const [appointments, setAppointments] = useState<AppointmentDoc[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadData() {
+      if (!linkedPatient?.uid) {
+        setDailyMetrics([]);
+        setNotifications([]);
+        setAppointments([]);
+        return;
+      }
+      try {
+        const [metrics, notes, appts] = await Promise.all([
+          listDailyHealthMetrics(linkedPatient.uid),
+          listNotifications(linkedPatient.uid),
+          listAppointmentsForPatient(linkedPatient.uid),
+        ]);
+        if (!cancelled) {
+          setDailyMetrics(metrics);
+          setNotifications(notes);
+          setAppointments(appts);
+        }
+      } catch (error) {
+        if (!cancelled) toast.error("Failed to load patient monitoring data.");
+      }
+    }
+
+    loadData();
+    return () => {
+      cancelled = true;
+    };
+  }, [linkedPatient?.uid]);
+
+  const chartReadings = useMemo(() => {
+    const patientId = linkedPatient?.patientId ?? "";
+    return dailyMetrics
+      .slice()
+      .sort((a, b) => a.date.localeCompare(b.date))
+      .flatMap((m) => [
+        {
+          id: `${m.id}-f`,
+          patientId,
+          value: m.fastingGlucose,
+          unit: 'mg/dL' as const,
+          type: 'fasting' as const,
+          timestamp: `${m.date}T07:00:00`,
+          notes: m.notes,
+        },
+        {
+          id: `${m.id}-p`,
+          patientId,
+          value: m.postMealGlucose,
+          unit: 'mg/dL' as const,
+          type: 'post-meal' as const,
+          timestamp: `${m.date}T13:00:00`,
+          notes: m.notes,
+        },
+      ]);
+  }, [dailyMetrics, linkedPatient?.patientId]);
+
+  const stats = useMemo(() => calculateGlucoseStats(chartReadings), [chartReadings]);
+  const latestDaily = dailyMetrics[0];
+  const latestGlucoseValue = latestDaily?.postMealGlucose ?? latestDaily?.fastingGlucose ?? 0;
+  const glucoseStatus = getGlucoseStatus(latestGlucoseValue || 0);
+  const unreadAlerts = notifications.filter(n => !n.isRead);
 
   const patientName = linkedPatient ? `${linkedPatient.firstName} ${linkedPatient.lastName}`.trim() : "";
   const patientId = linkedPatient?.patientId ?? "";
@@ -178,7 +246,7 @@ const FamilyDashboard = ({ onLogout }: FamilyDashboardProps) => {
                       glucoseStatus === 'elevated' ? 'text-warning' :
                       'text-danger'
                     }`}>
-                      {latestGlucose.value}
+                      {latestGlucoseValue || '--'}
                     </span>
                     <span className="text-2xl text-muted-foreground">mg/dL</span>
                   </div>
@@ -193,7 +261,7 @@ const FamilyDashboard = ({ onLogout }: FamilyDashboardProps) => {
                     </span>
                     <span className="text-sm text-muted-foreground flex items-center gap-1">
                       <Clock className="w-4 h-4" />
-                      Updated {new Date(latestGlucose.timestamp).toLocaleTimeString()}
+                      Updated {latestDaily?.date || '--'}
                     </span>
                   </div>
                 </div>
@@ -271,7 +339,7 @@ const FamilyDashboard = ({ onLogout }: FamilyDashboardProps) => {
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <GlucoseChart readings={mockGlucoseReadings.slice(-28)} />
+                <GlucoseChart readings={chartReadings.slice(-28)} />
               </CardContent>
             </Card>
           </motion.div>

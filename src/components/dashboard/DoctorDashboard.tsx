@@ -15,11 +15,13 @@ import {
   Plus,
   Download,
   Clock,
-  User
+  User,
+  Trash2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import {
   Dialog,
   DialogContent,
@@ -30,7 +32,7 @@ import {
 } from '@/components/ui/dialog';
 import { 
   calculateGlucoseStats,
-} from '@/data/mockData';
+} from '@/lib/metrics';
 import GlucoseChart from '@/components/charts/GlucoseChart';
 import HbA1cChart from '@/components/charts/HbA1cChart';
 import VitalsTrendChart from '@/components/charts/VitalsTrendChart';
@@ -39,12 +41,24 @@ import { useRoleBasedAuth } from '@/hooks/useRoleBasedAuth';
 import DeleteAccountButton from '@/components/auth/DeleteAccountButton';
 import {
   buildDayTimeSlots,
+  addDoctorPrivateNote,
   createDoctorScheduledAppointment,
+  createDietPlan,
+  createExerciseGoal,
+  createMedicalNote,
+  createPrescriptionPlan,
   listAvailableAppointmentSlotsForDoctor,
   listAppointmentsForDoctor,
+  listCarePlansForPatient,
   listDailyHealthMetrics,
+  listDoctorPrivateNotes,
+  uploadDietPlanImage,
   type AppointmentDoc,
+  type DoctorCarePlanDoc,
+  type DoctorPrivateNoteDoc,
   type DailyHealthMetricsDoc,
+  type MealTimingOption,
+  type PrescriptionMedicineInput,
   type TimeSlotOption,
   updateAppointmentStatus,
 } from '@/lib/firestore';
@@ -53,6 +67,21 @@ import { toast } from 'sonner';
 interface DoctorDashboardProps {
   onLogout: () => void;
 }
+
+type QuickActionType = "prescription" | "diet-plan" | "exercise-goal" | "medical-note" | null;
+
+type PrescriptionMedicineFormRow = PrescriptionMedicineInput & {
+  id: string;
+};
+
+const createEmptyMedicine = (): PrescriptionMedicineFormRow => ({
+  id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+  name: "",
+  dosage: "",
+  morning: "none",
+  afternoon: "none",
+  night: "none",
+});
 
 const DoctorDashboard = ({ onLogout }: DoctorDashboardProps) => {
   const { loading, doctorProfile, linkedPatients } = useRoleBasedAuth();
@@ -69,6 +98,22 @@ const DoctorDashboard = ({ onLogout }: DoctorDashboardProps) => {
   const [selectedPatientMetrics, setSelectedPatientMetrics] = useState<DailyHealthMetricsDoc[]>([]);
   const [selectedPatientMetricsLoading, setSelectedPatientMetricsLoading] = useState(false);
   const [openTrend, setOpenTrend] = useState<"bp" | "bpm" | "weight" | "hba1c" | null>(null);
+  const [privateNoteOpen, setPrivateNoteOpen] = useState(false);
+  const [privateNoteText, setPrivateNoteText] = useState("");
+  const [savingPrivateNote, setSavingPrivateNote] = useState(false);
+  const [privateNotes, setPrivateNotes] = useState<DoctorPrivateNoteDoc[]>([]);
+  const [carePlans, setCarePlans] = useState<DoctorCarePlanDoc[]>([]);
+  const [quickActionOpen, setQuickActionOpen] = useState(false);
+  const [quickActionType, setQuickActionType] = useState<QuickActionType>(null);
+  const [savingQuickAction, setSavingQuickAction] = useState(false);
+
+  const [prescriptionRows, setPrescriptionRows] = useState<PrescriptionMedicineFormRow[]>([createEmptyMedicine()]);
+  const [prescriptionComments, setPrescriptionComments] = useState("");
+  const [dietText, setDietText] = useState("");
+  const [dietCalorieLimit, setDietCalorieLimit] = useState("");
+  const [dietImageFile, setDietImageFile] = useState<File | null>(null);
+  const [exerciseGoalText, setExerciseGoalText] = useState("");
+  const [medicalNoteItems, setMedicalNoteItems] = useState<string[]>([""]);
 
   const patientsForUI = useMemo(() => {
     return linkedPatients.map((p) => ({
@@ -111,15 +156,25 @@ const DoctorDashboard = ({ onLogout }: DoctorDashboardProps) => {
   useEffect(() => {
     let cancelled = false;
 
-    async function loadSelectedPatientMetrics() {
+    async function loadSelectedPatientData() {
       if (!selectedPatient?.uid) {
         setSelectedPatientMetrics([]);
+        setPrivateNotes([]);
+        setCarePlans([]);
         return;
       }
       setSelectedPatientMetricsLoading(true);
       try {
-        const items = await listDailyHealthMetrics(selectedPatient.uid);
-        if (!cancelled) setSelectedPatientMetrics(items);
+        const [metrics, notes, plans] = await Promise.all([
+          listDailyHealthMetrics(selectedPatient.uid),
+          doctorProfile?.uid ? listDoctorPrivateNotes(doctorProfile.uid, selectedPatient.uid) : Promise.resolve([]),
+          listCarePlansForPatient(selectedPatient.uid),
+        ]);
+        if (!cancelled) {
+          setSelectedPatientMetrics(metrics);
+          setPrivateNotes(notes);
+          setCarePlans(doctorProfile?.uid ? plans.filter((p) => p.doctorUid === doctorProfile.uid) : plans);
+        }
       } catch (error) {
         if (!cancelled) toast.error("Failed to load patient health data.");
       } finally {
@@ -127,11 +182,11 @@ const DoctorDashboard = ({ onLogout }: DoctorDashboardProps) => {
       }
     }
 
-    loadSelectedPatientMetrics();
+    loadSelectedPatientData();
     return () => {
       cancelled = true;
     };
-  }, [selectedPatient?.uid]);
+  }, [doctorProfile?.uid, selectedPatient?.uid]);
 
   const patientGlucoseReadings = useMemo(() => {
     if (!selectedPatient) return [];
@@ -309,6 +364,143 @@ const DoctorDashboard = ({ onLogout }: DoctorDashboardProps) => {
     }
   };
 
+  const resetQuickActionForm = () => {
+    setPrescriptionRows([createEmptyMedicine()]);
+    setPrescriptionComments("");
+    setDietText("");
+    setDietCalorieLimit("");
+    setDietImageFile(null);
+    setExerciseGoalText("");
+    setMedicalNoteItems([""]);
+  };
+
+  const refreshCarePlanData = async () => {
+    if (!selectedPatient?.uid) return;
+    const plans = await listCarePlansForPatient(selectedPatient.uid);
+    setCarePlans(doctorProfile?.uid ? plans.filter((p) => p.doctorUid === doctorProfile.uid) : plans);
+  };
+
+  const openQuickActionDialog = (type: Exclude<QuickActionType, null>) => {
+    setQuickActionType(type);
+    setQuickActionOpen(true);
+  };
+
+  const updateMedicineField = (
+    rowId: string,
+    field: keyof Omit<PrescriptionMedicineFormRow, "id">,
+    value: string
+  ) => {
+    setPrescriptionRows((rows) =>
+      rows.map((row) => (row.id === rowId ? { ...row, [field]: value } : row))
+    );
+  };
+
+  const handleSavePrivateNote = async () => {
+    if (!doctorProfile || !selectedPatient) return;
+    const note = privateNoteText.trim();
+    if (!note) {
+      toast.error("Please write a note.");
+      return;
+    }
+
+    setSavingPrivateNote(true);
+    try {
+      await addDoctorPrivateNote({
+        doctorUid: doctorProfile.uid,
+        patientUid: selectedPatient.uid,
+        patientId: selectedPatient.id,
+        patientName: selectedPatient.name,
+        note,
+      });
+      const items = await listDoctorPrivateNotes(doctorProfile.uid, selectedPatient.uid);
+      setPrivateNotes(items);
+      setPrivateNoteText("");
+      setPrivateNoteOpen(false);
+      toast.success("Private note saved.");
+    } catch (error: unknown) {
+      const message = (error as { message?: string })?.message ?? "Failed to save note.";
+      toast.error(message);
+    } finally {
+      setSavingPrivateNote(false);
+    }
+  };
+
+  const handleSaveQuickAction = async () => {
+    if (!doctorProfile || !selectedPatient || !quickActionType) return;
+
+    setSavingQuickAction(true);
+    try {
+      if (quickActionType === "prescription") {
+        await createPrescriptionPlan({
+          patientUid: selectedPatient.uid,
+          patientId: selectedPatient.id,
+          patientName: selectedPatient.name,
+          doctorUid: doctorProfile.uid,
+          doctorId: doctorProfile.doctorId,
+          doctorName: doctorName || doctorProfile.doctorId,
+          medicines: prescriptionRows.map((row) => ({
+            name: row.name,
+            dosage: row.dosage,
+            morning: row.morning,
+            afternoon: row.afternoon,
+            night: row.night,
+          })),
+          comments: prescriptionComments,
+        });
+      } else if (quickActionType === "diet-plan") {
+        let imageUrl: string | undefined;
+        let imagePath: string | undefined;
+        if (dietImageFile) {
+          const uploaded = await uploadDietPlanImage(dietImageFile, doctorProfile.uid, selectedPatient.uid);
+          imageUrl = uploaded.imageUrl;
+          imagePath = uploaded.imagePath;
+        }
+        await createDietPlan({
+          patientUid: selectedPatient.uid,
+          patientId: selectedPatient.id,
+          patientName: selectedPatient.name,
+          doctorUid: doctorProfile.uid,
+          doctorId: doctorProfile.doctorId,
+          doctorName: doctorName || doctorProfile.doctorId,
+          text: dietText,
+          calorieLimit: Number(dietCalorieLimit),
+          imageUrl,
+          imagePath,
+        });
+      } else if (quickActionType === "exercise-goal") {
+        await createExerciseGoal({
+          patientUid: selectedPatient.uid,
+          patientId: selectedPatient.id,
+          patientName: selectedPatient.name,
+          doctorUid: doctorProfile.uid,
+          doctorId: doctorProfile.doctorId,
+          doctorName: doctorName || doctorProfile.doctorId,
+          text: exerciseGoalText,
+        });
+      } else if (quickActionType === "medical-note") {
+        await createMedicalNote({
+          patientUid: selectedPatient.uid,
+          patientId: selectedPatient.id,
+          patientName: selectedPatient.name,
+          doctorUid: doctorProfile.uid,
+          doctorId: doctorProfile.doctorId,
+          doctorName: doctorName || doctorProfile.doctorId,
+          items: medicalNoteItems,
+        });
+      }
+
+      await refreshCarePlanData();
+      setQuickActionOpen(false);
+      resetQuickActionForm();
+      toast.success("Patient update saved.");
+    } catch (error: unknown) {
+      const message = (error as { message?: string })?.message ?? "Failed to save update.";
+      toast.error(message);
+    } finally {
+      setSavingQuickAction(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gradient-hero">
       {/* Header */}
@@ -434,7 +626,7 @@ const DoctorDashboard = ({ onLogout }: DoctorDashboardProps) => {
                     </div>
 
                     <div className="flex gap-3">
-                      <Button variant="outline">
+                      <Button variant="outline" onClick={() => setPrivateNoteOpen(true)} disabled={!selectedPatient}>
                         <FileText className="w-5 h-5 mr-2" />
                         Add Note
                       </Button>
@@ -519,6 +711,206 @@ const DoctorDashboard = ({ onLogout }: DoctorDashboardProps) => {
                 {openTrend === "bpm" && <VitalsTrendChart metric="heart-rate" data={selectedPatientMetrics} />}
                 {openTrend === "weight" && <VitalsTrendChart metric="weight" data={selectedPatientMetrics} />}
                 {openTrend === "hba1c" && <HbA1cChart readings={hba1cReadings} />}
+              </DialogContent>
+            </Dialog>
+
+            <Dialog open={privateNoteOpen} onOpenChange={setPrivateNoteOpen}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Doctor Private Note</DialogTitle>
+                  <DialogDescription>
+                    This note is visible only to you and stays hidden from patient and caretaker.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="space-y-2">
+                  <Textarea
+                    rows={5}
+                    value={privateNoteText}
+                    onChange={(e) => setPrivateNoteText(e.target.value)}
+                    placeholder="Write your private observation..."
+                  />
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setPrivateNoteOpen(false)}>
+                    Cancel
+                  </Button>
+                  <Button variant="hero" onClick={handleSavePrivateNote} disabled={savingPrivateNote}>
+                    {savingPrivateNote ? "Saving..." : "Save Note"}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+
+            <Dialog
+              open={quickActionOpen}
+              onOpenChange={(open) => {
+                setQuickActionOpen(open);
+                if (!open) {
+                  setQuickActionType(null);
+                  resetQuickActionForm();
+                }
+              }}
+            >
+              <DialogContent className="max-w-3xl">
+                <DialogHeader>
+                  <DialogTitle>
+                    {quickActionType === "prescription" && "Write Prescription"}
+                    {quickActionType === "diet-plan" && "Update Diet Plan"}
+                    {quickActionType === "exercise-goal" && "Set Exercise Goals"}
+                    {quickActionType === "medical-note" && "Add Medical Note"}
+                  </DialogTitle>
+                  <DialogDescription>
+                    {selectedPatient ? `${selectedPatient.name} (${selectedPatient.id})` : ""}
+                  </DialogDescription>
+                </DialogHeader>
+
+                {quickActionType === "prescription" && (
+                  <div className="space-y-4 max-h-[60vh] overflow-auto pr-1">
+                    {prescriptionRows.map((row, index) => (
+                      <div key={row.id} className="rounded-lg border border-border/60 p-3 space-y-3">
+                        <div className="flex items-center justify-between">
+                          <p className="font-medium">Medicine {index + 1}</p>
+                          {prescriptionRows.length > 1 && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => setPrescriptionRows((rows) => rows.filter((r) => r.id !== row.id))}
+                            >
+                              <Trash2 className="w-4 h-4 mr-1" />
+                              Remove
+                            </Button>
+                          )}
+                        </div>
+                        <div className="grid md:grid-cols-2 gap-3">
+                          <Input
+                            placeholder="Medicine name"
+                            value={row.name}
+                            onChange={(e) => updateMedicineField(row.id, "name", e.target.value)}
+                          />
+                          <Input
+                            placeholder="Dosage (e.g. 500 mg)"
+                            value={row.dosage}
+                            onChange={(e) => updateMedicineField(row.id, "dosage", e.target.value)}
+                          />
+                        </div>
+                        <div className="grid md:grid-cols-3 gap-3">
+                          {(["morning", "afternoon", "night"] as const).map((period) => (
+                            <div key={`${row.id}-${period}`}>
+                              <p className="text-sm font-medium capitalize mb-1">{period}</p>
+                              <select
+                                className="w-full h-10 rounded-md border border-input bg-background px-3 text-sm"
+                                value={row[period]}
+                                onChange={(e) =>
+                                  updateMedicineField(row.id, period, e.target.value as MealTimingOption)
+                                }
+                              >
+                                <option value="none">Not required</option>
+                                <option value="before-food">Before food</option>
+                                <option value="after-food">After food</option>
+                              </select>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                    <Button
+                      variant="outline"
+                      onClick={() => setPrescriptionRows((rows) => [...rows, createEmptyMedicine()])}
+                    >
+                      Add Another Medicine
+                    </Button>
+                    <Textarea
+                      rows={3}
+                      placeholder="Comments / remarks"
+                      value={prescriptionComments}
+                      onChange={(e) => setPrescriptionComments(e.target.value)}
+                    />
+                  </div>
+                )}
+
+                {quickActionType === "diet-plan" && (
+                  <div className="space-y-4">
+                    <Textarea
+                      rows={5}
+                      placeholder="Write diet plan details..."
+                      value={dietText}
+                      onChange={(e) => setDietText(e.target.value)}
+                    />
+                    <Input
+                      type="number"
+                      min={1}
+                      placeholder="Calorie limit per day"
+                      value={dietCalorieLimit}
+                      onChange={(e) => setDietCalorieLimit(e.target.value)}
+                    />
+                    <div>
+                      <Input
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => setDietImageFile(e.target.files?.[0] ?? null)}
+                      />
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Optional image. Max size 5 MB.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {quickActionType === "exercise-goal" && (
+                  <Textarea
+                    rows={6}
+                    placeholder="Set exercise goals for this patient..."
+                    value={exerciseGoalText}
+                    onChange={(e) => setExerciseGoalText(e.target.value)}
+                  />
+                )}
+
+                {quickActionType === "medical-note" && (
+                  <div className="space-y-3">
+                    {medicalNoteItems.map((item, idx) => (
+                      <div key={`medical-note-item-${idx}`} className="flex gap-2">
+                        <Input
+                          placeholder={`Note item ${idx + 1}`}
+                          value={item}
+                          onChange={(e) =>
+                            setMedicalNoteItems((items) =>
+                              items.map((entry, i) => (i === idx ? e.target.value : entry))
+                            )
+                          }
+                        />
+                        {medicalNoteItems.length > 1 && (
+                          <Button
+                            variant="ghost"
+                            onClick={() =>
+                              setMedicalNoteItems((items) => items.filter((_, i) => i !== idx))
+                            }
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        )}
+                      </div>
+                    ))}
+                    <Button
+                      variant="outline"
+                      onClick={() => setMedicalNoteItems((items) => [...items, ""])}
+                    >
+                      Add Note Item
+                    </Button>
+                  </div>
+                )}
+
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setQuickActionOpen(false)}>
+                    Cancel
+                  </Button>
+                  <Button
+                    variant="hero"
+                    onClick={handleSaveQuickAction}
+                    disabled={!selectedPatient || !quickActionType || savingQuickAction}
+                  >
+                    {savingQuickAction ? "Saving..." : "Save"}
+                  </Button>
+                </DialogFooter>
               </DialogContent>
             </Dialog>
 
@@ -607,6 +999,67 @@ const DoctorDashboard = ({ onLogout }: DoctorDashboardProps) => {
                       <p className="font-medium">{appt.patientName || appt.patientId}</p>
                       <p className="text-sm text-muted-foreground">
                         {appt.date} • {appt.slotLabel}
+                      </p>
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+            </motion.div>
+
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.09 }}
+            >
+              <Card variant="glass">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <FileText className="w-5 h-5 text-primary" />
+                    Doctor Private Notes
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {privateNotes.length === 0 && (
+                    <p className="text-sm text-muted-foreground">No private notes for this patient yet.</p>
+                  )}
+                  {privateNotes.slice(0, 5).map((note) => (
+                    <div key={note.id} className="rounded-lg border border-border/60 p-3">
+                      <p className="text-sm">{note.note}</p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {note.createdAt ? note.createdAt.toLocaleString() : "Recently added"}
+                      </p>
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+            </motion.div>
+
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.095 }}
+            >
+              <Card variant="glass">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Bell className="w-5 h-5 text-primary" />
+                    Recent Patient Updates
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {carePlans.length === 0 && (
+                    <p className="text-sm text-muted-foreground">No updates sent yet from quick actions.</p>
+                  )}
+                  {carePlans.slice(0, 5).map((plan) => (
+                    <div key={plan.id} className="rounded-lg border border-border/60 p-3">
+                      <p className="font-medium">
+                        {plan.type === "prescription" && "Prescription"}
+                        {plan.type === "diet-plan" && "Diet Plan"}
+                        {plan.type === "exercise-goal" && "Exercise Goal"}
+                        {plan.type === "medical-note" && "Medical Note"}
+                      </p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {plan.createdAt ? plan.createdAt.toLocaleString() : "Recently added"}
                       </p>
                     </div>
                   ))}
@@ -735,15 +1188,17 @@ const DoctorDashboard = ({ onLogout }: DoctorDashboardProps) => {
                 <CardContent>
                   <div className="grid md:grid-cols-4 gap-4">
                     {[
-                      { icon: FileText, label: 'Write Prescription', color: 'bg-primary' },
-                      { icon: Calendar, label: 'Update Diet Plan', color: 'bg-success' },
-                      { icon: Activity, label: 'Set Exercise Goals', color: 'bg-warning' },
-                      { icon: AlertTriangle, label: 'Add Medical Note', color: 'bg-accent' },
+                      { icon: FileText, label: 'Write Prescription', color: 'bg-primary', type: 'prescription' as const },
+                      { icon: Calendar, label: 'Update Diet Plan', color: 'bg-success', type: 'diet-plan' as const },
+                      { icon: Activity, label: 'Set Exercise Goals', color: 'bg-warning', type: 'exercise-goal' as const },
+                      { icon: AlertTriangle, label: 'Add Medical Note', color: 'bg-accent', type: 'medical-note' as const },
                     ].map((action) => (
                       <Button
                         key={action.label}
                         variant="glass"
                         className="h-auto py-6 flex flex-col items-center gap-3 hover:shadow-glow"
+                        onClick={() => openQuickActionDialog(action.type)}
+                        disabled={!selectedPatient}
                       >
                         <div className={`w-12 h-12 rounded-xl ${action.color} flex items-center justify-center`}>
                           <action.icon className="w-6 h-6 text-primary-foreground" />
