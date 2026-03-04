@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import { 
   Stethoscope, 
@@ -114,6 +114,7 @@ const DoctorDashboard = ({ onLogout }: DoctorDashboardProps) => {
   const [dietImageFile, setDietImageFile] = useState<File | null>(null);
   const [exerciseGoalText, setExerciseGoalText] = useState("");
   const [medicalNoteItems, setMedicalNoteItems] = useState<string[]>([""]);
+  const recentUpdatesRef = useRef<HTMLDivElement | null>(null);
 
   const patientsForUI = useMemo(() => {
     return linkedPatients.map((p) => ({
@@ -277,8 +278,6 @@ const DoctorDashboard = ({ onLogout }: DoctorDashboardProps) => {
       .slice(0, 8);
   }, [appointments]);
 
-  const pendingCount = appointments.filter((a) => a.status === 'pending').length;
-
   const handleStatusChange = async (appointmentId: string, status: 'approved' | 'rejected') => {
     if (!doctorProfile?.uid) return;
     setStatusUpdatingId(appointmentId);
@@ -381,8 +380,35 @@ const DoctorDashboard = ({ onLogout }: DoctorDashboardProps) => {
   };
 
   const openQuickActionDialog = (type: Exclude<QuickActionType, null>) => {
+    resetQuickActionForm();
+    const existing = carePlans.find((plan) => plan.type === type);
+
+    if (type === "prescription" && existing?.prescription) {
+      const rows = existing.prescription.medicines.length
+        ? existing.prescription.medicines.map((m) => ({
+            ...m,
+            id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          }))
+        : [createEmptyMedicine()];
+      setPrescriptionRows(rows);
+      setPrescriptionComments(existing.prescription.comments ?? "");
+    } else if (type === "diet-plan" && existing?.dietPlan) {
+      setDietText(existing.dietPlan.text ?? "");
+      setDietCalorieLimit(
+        existing.dietPlan.calorieLimit ? String(existing.dietPlan.calorieLimit) : ""
+      );
+    } else if (type === "exercise-goal" && existing?.exerciseGoal) {
+      setExerciseGoalText(existing.exerciseGoal.text ?? "");
+    } else if (type === "medical-note" && existing?.medicalNote) {
+      setMedicalNoteItems(existing.medicalNote.items.length ? existing.medicalNote.items : [""]);
+    }
+
     setQuickActionType(type);
     setQuickActionOpen(true);
+  };
+
+  const handleBellClick = () => {
+    recentUpdatesRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
   const updateMedicineField = (
@@ -527,11 +553,13 @@ const DoctorDashboard = ({ onLogout }: DoctorDashboardProps) => {
                   className="pl-10 w-64 rounded-xl"
                 />
               </div>
-              <Button variant="glass" size="icon-lg" className="relative">
+              <Button
+                variant="glass"
+                size="icon-lg"
+                onClick={handleBellClick}
+                aria-label="Go to recent patient updates"
+              >
                 <Bell className="w-6 h-6" />
-                <span className="absolute -top-1 -right-1 w-5 h-5 bg-danger text-danger-foreground rounded-full text-xs flex items-center justify-center">
-                  {pendingCount}
-                </span>
               </Button>
               <DeleteAccountButton
                 variant="ghost"
@@ -1035,9 +1063,11 @@ const DoctorDashboard = ({ onLogout }: DoctorDashboardProps) => {
             </motion.div>
 
             <motion.div
+              ref={recentUpdatesRef}
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.095 }}
+              className="scroll-mt-28"
             >
               <Card variant="glass">
                 <CardHeader>

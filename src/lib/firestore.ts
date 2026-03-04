@@ -676,7 +676,16 @@ export async function createPrescriptionPlan(input: CreatePrescriptionInput): Pr
     throw new Error("Add at least one medicine with name and dosage.");
   }
 
-  await addDoc(carePlansRef, {
+  const existing = await getDocs(
+    query(
+      carePlansRef,
+      where("patientUid", "==", input.patientUid),
+      where("doctorUid", "==", input.doctorUid),
+      where("type", "==", "prescription")
+    )
+  );
+
+  const payload = {
     type: "prescription" as DoctorCarePlanType,
     patientUid: input.patientUid,
     patientId: input.patientId,
@@ -686,8 +695,17 @@ export async function createPrescriptionPlan(input: CreatePrescriptionInput): Pr
     doctorName: input.doctorName,
     medicines,
     comments: input.comments?.trim() || null,
-    createdAt: serverTimestamp(),
-  });
+    updatedAt: serverTimestamp(),
+  };
+
+  if (!existing.empty) {
+    await updateDoc(existing.docs[0].ref, payload);
+  } else {
+    await addDoc(carePlansRef, {
+      ...payload,
+      createdAt: serverTimestamp(),
+    });
+  }
   await createCarePlanNotification(input.patientUid, input.doctorName, "prescription");
 }
 
@@ -699,7 +717,16 @@ export async function createDietPlan(input: CreateDietPlanInput): Promise<void> 
     throw new Error("Calorie limit must be a positive number.");
   }
 
-  await addDoc(carePlansRef, {
+  const existing = await getDocs(
+    query(
+      carePlansRef,
+      where("patientUid", "==", input.patientUid),
+      where("doctorUid", "==", input.doctorUid),
+      where("type", "==", "diet-plan")
+    )
+  );
+
+  const payload = {
     type: "diet-plan" as DoctorCarePlanType,
     patientUid: input.patientUid,
     patientId: input.patientId,
@@ -711,8 +738,17 @@ export async function createDietPlan(input: CreateDietPlanInput): Promise<void> 
     calorieLimit: Math.round(input.calorieLimit),
     imageUrl: input.imageUrl ?? null,
     imagePath: input.imagePath ?? null,
-    createdAt: serverTimestamp(),
-  });
+    updatedAt: serverTimestamp(),
+  };
+
+  if (!existing.empty) {
+    await updateDoc(existing.docs[0].ref, payload);
+  } else {
+    await addDoc(carePlansRef, {
+      ...payload,
+      createdAt: serverTimestamp(),
+    });
+  }
   await createCarePlanNotification(input.patientUid, input.doctorName, "diet-plan");
 }
 
@@ -721,7 +757,16 @@ export async function createExerciseGoal(input: CreateExerciseGoalInput): Promis
     throw new Error("Exercise goal text is required.");
   }
 
-  await addDoc(carePlansRef, {
+  const existing = await getDocs(
+    query(
+      carePlansRef,
+      where("patientUid", "==", input.patientUid),
+      where("doctorUid", "==", input.doctorUid),
+      where("type", "==", "exercise-goal")
+    )
+  );
+
+  const payload = {
     type: "exercise-goal" as DoctorCarePlanType,
     patientUid: input.patientUid,
     patientId: input.patientId,
@@ -730,8 +775,17 @@ export async function createExerciseGoal(input: CreateExerciseGoalInput): Promis
     doctorId: input.doctorId,
     doctorName: input.doctorName,
     text: input.text.trim(),
-    createdAt: serverTimestamp(),
-  });
+    updatedAt: serverTimestamp(),
+  };
+
+  if (!existing.empty) {
+    await updateDoc(existing.docs[0].ref, payload);
+  } else {
+    await addDoc(carePlansRef, {
+      ...payload,
+      createdAt: serverTimestamp(),
+    });
+  }
   await createCarePlanNotification(input.patientUid, input.doctorName, "exercise-goal");
 }
 
@@ -741,7 +795,16 @@ export async function createMedicalNote(input: CreateMedicalNoteInput): Promise<
     throw new Error("Add at least one medical note item.");
   }
 
-  await addDoc(carePlansRef, {
+  const existing = await getDocs(
+    query(
+      carePlansRef,
+      where("patientUid", "==", input.patientUid),
+      where("doctorUid", "==", input.doctorUid),
+      where("type", "==", "medical-note")
+    )
+  );
+
+  const payload = {
     type: "medical-note" as DoctorCarePlanType,
     patientUid: input.patientUid,
     patientId: input.patientId,
@@ -750,8 +813,17 @@ export async function createMedicalNote(input: CreateMedicalNoteInput): Promise<
     doctorId: input.doctorId,
     doctorName: input.doctorName,
     items,
-    createdAt: serverTimestamp(),
-  });
+    updatedAt: serverTimestamp(),
+  };
+
+  if (!existing.empty) {
+    await updateDoc(existing.docs[0].ref, payload);
+  } else {
+    await addDoc(carePlansRef, {
+      ...payload,
+      createdAt: serverTimestamp(),
+    });
+  }
   await createCarePlanNotification(input.patientUid, input.doctorName, "medical-note");
 }
 
