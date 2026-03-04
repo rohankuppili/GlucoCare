@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { UserRole } from '@/types';
 import HeroSection from '@/components/landing/HeroSection';
 import RoleSelector from '@/components/landing/RoleSelector';
@@ -9,14 +9,20 @@ import FamilyDashboard from '@/components/dashboard/FamilyDashboard';
 import DoctorDashboard from '@/components/dashboard/DoctorDashboard';
 import { auth, googleProvider } from '@/lib/firebase';
 import { signInWithPopup, signOut } from 'firebase/auth';
-import { useAuthUser } from '@/hooks/useAuthUser';
+import { useAuthWithRole } from '@/contexts/AuthContext';
+import RoleSetup from '@/pages/RoleSetup';
+import { getUserProfile, setUserProfile } from '@/lib/roles';
 
 type AppView = 'landing' | 'login' | 'dashboard';
 
 const Index = () => {
   const [currentView, setCurrentView] = useState<AppView>('landing');
   const [selectedRole, setSelectedRole] = useState<UserRole | null>(null);
-  const { user } = useAuthUser();
+  const { user, profile, loading: authLoading, refreshProfile } = useAuthWithRole();
+
+  const effectiveRole: UserRole | null = useMemo(() => {
+    return (profile?.role as UserRole | undefined) ?? selectedRole;
+  }, [profile?.role, selectedRole]);
 
   const handleSelectRole = (role: UserRole) => {
     setSelectedRole(role);
@@ -24,7 +30,31 @@ const Index = () => {
   };
 
   const handleLogin = async () => {
-    await signInWithPopup(auth, googleProvider);
+    if (!selectedRole) return;
+
+    const signedInUser = user ?? (await signInWithPopup(auth, googleProvider)).user;
+
+    // Ensure a user profile exists so onboarding state is authoritative in Firestore.
+    const existing = await getUserProfile(signedInUser.uid);
+    if (!existing) {
+      const displayParts = (signedInUser.displayName || "").split(" ");
+      const firstName = displayParts[0] || "";
+      const lastName = displayParts.slice(1).join(" ") || "";
+
+      await setUserProfile(signedInUser.uid, {
+        email: signedInUser.email || "",
+        firstName,
+        lastName,
+        dob: "",
+        phone: "",
+        displayName: signedInUser.displayName || undefined,
+        photoURL: signedInUser.photoURL || undefined,
+        role: selectedRole,
+        onboarded: false,
+      });
+    }
+
+    await refreshProfile();
     setCurrentView('dashboard');
   };
 
@@ -54,9 +84,32 @@ const Index = () => {
     );
   }
 
+  if (user && authLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <p>Loading...</p>
+      </div>
+    );
+  }
+
+  // Onboarding gate: if authenticated but not onboarded, show role setup flow.
+  if (user && (!profile || !profile.onboarded)) {
+    return (
+      <div className="min-h-screen bg-gradient-hero p-6">
+        <RoleSetup
+          initialRole={effectiveRole}
+          onComplete={async () => {
+            await refreshProfile();
+            setCurrentView('dashboard');
+          }}
+        />
+      </div>
+    );
+  }
+
   // Render dashboard based on role
-  if (currentView === 'dashboard' && !!user && selectedRole) {
-    switch (selectedRole) {
+  if (currentView === 'dashboard' && !!user && effectiveRole) {
+    switch (effectiveRole) {
       case 'patient':
         return <PatientDashboard onLogout={handleLogout} />;
       case 'family':

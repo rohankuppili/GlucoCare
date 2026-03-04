@@ -32,6 +32,7 @@ import {
 import { getGlucoseStatus } from '@/types';
 import GlucoseChart from '@/components/charts/GlucoseChart';
 import MetricCard from '@/components/dashboard/MetricCard';
+import { useRoleBasedAuth } from '@/hooks/useRoleBasedAuth';
 
 interface FamilyDashboardProps {
   onLogout: () => void;
@@ -45,10 +46,27 @@ const nearbyServices = [
 ];
 
 const FamilyDashboard = ({ onLogout }: FamilyDashboardProps) => {
+  const { loading, linkedPatient } = useRoleBasedAuth();
   const stats = calculateGlucoseStats(mockGlucoseReadings);
   const latestGlucose = mockGlucoseReadings[mockGlucoseReadings.length - 1];
   const glucoseStatus = getGlucoseStatus(latestGlucose.value);
   const unreadAlerts = mockAlerts.filter(a => !a.isRead);
+
+  const patientName = linkedPatient ? `${linkedPatient.firstName} ${linkedPatient.lastName}`.trim() : "";
+  const patientId = linkedPatient?.patientId ?? "";
+  const patientInitial = (patientName || patientId || "P").charAt(0).toUpperCase();
+
+  const patientDob = linkedPatient?.dob || "";
+  const patientAge = (() => {
+    if (!patientDob) return null;
+    const d = new Date(patientDob);
+    if (Number.isNaN(d.getTime())) return null;
+    const now = new Date();
+    let age = now.getFullYear() - d.getFullYear();
+    const m = now.getMonth() - d.getMonth();
+    if (m < 0 || (m === 0 && now.getDate() < d.getDate())) age -= 1;
+    return age;
+  })();
 
   return (
     <div className="min-h-screen bg-gradient-hero">
@@ -62,7 +80,7 @@ const FamilyDashboard = ({ onLogout }: FamilyDashboardProps) => {
               </div>
               <div>
                 <p className="text-muted-foreground">Family Caregiver Dashboard</p>
-                <h1 className="text-2xl font-bold">Monitoring: {mockPatient.name}</h1>
+                <h1 className="text-2xl font-bold">Monitoring: {loading ? "Loading..." : (patientName || "Patient")}</h1>
               </div>
             </div>
 
@@ -96,16 +114,16 @@ const FamilyDashboard = ({ onLogout }: FamilyDashboardProps) => {
                 <div className="flex items-center gap-6">
                   <div className="w-20 h-20 rounded-2xl bg-primary/10 flex items-center justify-center">
                     <span className="text-3xl font-bold text-primary">
-                      {mockPatient.name.charAt(0)}
+                      {patientInitial}
                     </span>
                   </div>
                   <div>
-                    <h2 className="text-2xl font-bold">{mockPatient.name}</h2>
+                    <h2 className="text-2xl font-bold">{loading ? "Loading..." : (patientName || "Patient")}</h2>
                     <p className="text-muted-foreground">
-                      {mockPatient.age} years • {mockPatient.diabetesType === 'type2' ? 'Type 2 Diabetes' : 'Type 1 Diabetes'}
+                      {patientAge !== null ? `${patientAge} years` : ""}
                     </p>
                     <p className="text-sm text-muted-foreground mt-1">
-                      Patient ID: {mockPatient.id}
+                      Patient ID: {patientId || '—'}
                     </p>
                   </div>
                 </div>

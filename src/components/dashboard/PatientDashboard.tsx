@@ -33,6 +33,7 @@ import MetricCard from '@/components/dashboard/MetricCard';
 import AlertsPanel from '@/components/dashboard/AlertsPanel';
 import InsightsPanel from '@/components/dashboard/InsightsPanel';
 import { useAuthUser } from '@/hooks/useAuthUser';
+import { useRoleBasedAuth } from '@/hooks/useRoleBasedAuth';
 import { listGlucoseReadings, type GlucoseReadingDoc } from '@/lib/firestore';
 
 interface PatientDashboardProps {
@@ -42,8 +43,11 @@ interface PatientDashboardProps {
 const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
   const [activeTab, setActiveTab] = useState<'overview' | 'glucose' | 'diet' | 'activity'>('overview');
   const { user } = useAuthUser();
+  const { loading: roleLoading, patientProfile } = useRoleBasedAuth();
   const [glucoseReadings, setGlucoseReadings] = useState<GlucoseReadingDoc[]>([]);
   const [glucoseLoading, setGlucoseLoading] = useState(true);
+
+  const patientName = patientProfile ? `${patientProfile.firstName} ${patientProfile.lastName}`.trim() : "";
 
   useEffect(() => {
     let cancelled = false;
@@ -118,7 +122,7 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
               </div>
               <div>
                 <p className="text-muted-foreground">{getGreeting()},</p>
-                <h1 className="text-2xl font-bold">{mockPatient.name}</h1>
+                <h1 className="text-2xl font-bold">{roleLoading ? "Loading..." : (patientName || "Patient")}</h1>
               </div>
             </div>
 

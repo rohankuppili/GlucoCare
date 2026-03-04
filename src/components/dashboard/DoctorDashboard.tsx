@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import { 
   Stethoscope, 
@@ -21,33 +21,46 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { 
-  mockPatient, 
   mockGlucoseReadings, 
   mockHbA1cReadings,
   calculateGlucoseStats,
-  mockDoctor,
   mockAppointments
 } from '@/data/mockData';
 import GlucoseChart from '@/components/charts/GlucoseChart';
 import HbA1cChart from '@/components/charts/HbA1cChart';
 import MetricCard from '@/components/dashboard/MetricCard';
+import { useRoleBasedAuth } from '@/hooks/useRoleBasedAuth';
 
 interface DoctorDashboardProps {
   onLogout: () => void;
 }
 
-// Mock additional patients for demo
-const mockPatients = [
-  { ...mockPatient, id: 'PAT-2024-001', name: 'Ramesh Kumar', lastVisit: '2 days ago', status: 'stable' },
-  { ...mockPatient, id: 'PAT-2024-002', name: 'Sunita Patel', lastVisit: '1 week ago', status: 'attention' },
-  { ...mockPatient, id: 'PAT-2024-003', name: 'Vijay Sharma', lastVisit: '3 days ago', status: 'stable' },
-  { ...mockPatient, id: 'PAT-2024-004', name: 'Lakshmi Iyer', lastVisit: 'Today', status: 'critical' },
-];
-
 const DoctorDashboard = ({ onLogout }: DoctorDashboardProps) => {
-  const [selectedPatient, setSelectedPatient] = useState(mockPatients[0]);
+  const { loading, doctorProfile, linkedPatients } = useRoleBasedAuth();
+
+  const patientsForUI = useMemo(() => {
+    return linkedPatients.map((p) => ({
+      id: p.patientId,
+      name: `${p.firstName} ${p.lastName}`.trim() || p.patientId,
+      lastVisit: '—',
+      status: 'stable',
+      age: 0,
+      diabetesType: 'type2' as const,
+    }));
+  }, [linkedPatients]);
+
+  const [selectedPatient, setSelectedPatient] = useState(() => patientsForUI[0]);
   const [searchQuery, setSearchQuery] = useState('');
   const stats = calculateGlucoseStats(mockGlucoseReadings);
+
+  const doctorName = doctorProfile ? `${doctorProfile.firstName} ${doctorProfile.lastName}`.trim() : "";
+
+  // Keep selected patient in sync if linkedPatients load later.
+  useEffect(() => {
+    if (!selectedPatient && patientsForUI.length > 0) {
+      setSelectedPatient(patientsForUI[0]);
+    }
+  }, [patientsForUI, selectedPatient]);
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -58,7 +71,7 @@ const DoctorDashboard = ({ onLogout }: DoctorDashboardProps) => {
     }
   };
 
-  const filteredPatients = mockPatients.filter(p => 
+  const filteredPatients = patientsForUI.filter(p => 
     p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
     p.id.toLowerCase().includes(searchQuery.toLowerCase())
   );
@@ -75,7 +88,7 @@ const DoctorDashboard = ({ onLogout }: DoctorDashboardProps) => {
               </div>
               <div>
                 <p className="text-muted-foreground">Welcome back,</p>
-                <h1 className="text-2xl font-bold">{mockDoctor.name}</h1>
+                <h1 className="text-2xl font-bold">{loading ? "Loading..." : (doctorName || "Doctor")}</h1>
               </div>
             </div>
 
@@ -116,7 +129,7 @@ const DoctorDashboard = ({ onLogout }: DoctorDashboardProps) => {
                 <div className="flex items-center justify-between">
                   <CardTitle className="flex items-center gap-2">
                     <Users className="w-5 h-5 text-primary" />
-                    Patients ({mockPatients.length})
+                    Patients ({patientsForUI.length})
                   </CardTitle>
                   <Button variant="ghost" size="icon">
                     <Plus className="w-5 h-5" />
@@ -173,11 +186,11 @@ const DoctorDashboard = ({ onLogout }: DoctorDashboardProps) => {
                         <User className="w-8 h-8 text-primary" />
                       </div>
                       <div>
-                        <h2 className="text-2xl font-bold">{selectedPatient.name}</h2>
+                        <h2 className="text-2xl font-bold">{selectedPatient?.name ?? (loading ? "Loading..." : "No linked patient")}</h2>
                         <p className="text-muted-foreground">
-                          {selectedPatient.age} years • {selectedPatient.diabetesType === 'type2' ? 'Type 2 Diabetes' : 'Type 1 Diabetes'}
+                          {selectedPatient ? "" : "Link patients to see them here."}
                         </p>
-                        <p className="text-sm text-muted-foreground">ID: {selectedPatient.id}</p>
+                        <p className="text-sm text-muted-foreground">ID: {selectedPatient?.id ?? "—"}</p>
                       </div>
                     </div>
 
