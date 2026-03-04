@@ -192,12 +192,13 @@ export type AppointmentDoc = {
 
 export type NotificationDoc = {
   id: string;
-  type: "appointment";
+  type: "appointment" | "care-plan";
   title: string;
   message: string;
   createdAt: Date;
   isRead: boolean;
   appointmentId?: string;
+  carePlanType?: DoctorCarePlanType;
   status?: AppointmentStatus;
 };
 
@@ -257,14 +258,16 @@ function toAppointmentDoc(d: { id: string; data: () => Record<string, unknown> }
 
 function toNotificationDoc(d: { id: string; data: () => Record<string, unknown> }): NotificationDoc {
   const raw = d.data();
+  const type = raw.type === "care-plan" ? "care-plan" : "appointment";
   return {
     id: d.id,
-    type: "appointment",
+    type,
     title: String(raw.title ?? ""),
     message: String(raw.message ?? ""),
     createdAt: toDateValue(raw.createdAt as Date | { toDate: () => Date }) ?? new Date(),
     isRead: Boolean(raw.isRead ?? false),
     appointmentId: (raw.appointmentId as string | undefined) ?? undefined,
+    carePlanType: (raw.carePlanType as DoctorCarePlanType | undefined) ?? undefined,
     status: (raw.status as AppointmentStatus | undefined) ?? undefined,
   };
 }
@@ -275,6 +278,34 @@ function sortByScheduledAsc(a: AppointmentDoc, b: AppointmentDoc): number {
 
 function sortByCreatedDesc(a: NotificationDoc, b: NotificationDoc): number {
   return b.createdAt.getTime() - a.createdAt.getTime();
+}
+
+async function createCarePlanNotification(
+  patientUid: string,
+  doctorName: string,
+  carePlanType: DoctorCarePlanType
+): Promise<void> {
+  const titleByType: Record<DoctorCarePlanType, string> = {
+    prescription: "New Prescription",
+    "diet-plan": "Diet Plan Updated",
+    "exercise-goal": "Exercise Goal Updated",
+    "medical-note": "Medical Notes Added",
+  };
+  const messageByType: Record<DoctorCarePlanType, string> = {
+    prescription: `Dr. ${doctorName} has shared a new prescription.`,
+    "diet-plan": `Dr. ${doctorName} has updated your diet plan.`,
+    "exercise-goal": `Dr. ${doctorName} has set/updated your exercise goals.`,
+    "medical-note": `Dr. ${doctorName} has added medical notes for you.`,
+  };
+
+  await addDoc(notificationsRef(patientUid), {
+    type: "care-plan",
+    carePlanType,
+    title: titleByType[carePlanType],
+    message: messageByType[carePlanType],
+    isRead: false,
+    createdAt: serverTimestamp(),
+  });
 }
 
 export type TimeSlotOption = {
@@ -657,6 +688,7 @@ export async function createPrescriptionPlan(input: CreatePrescriptionInput): Pr
     comments: input.comments?.trim() || null,
     createdAt: serverTimestamp(),
   });
+  await createCarePlanNotification(input.patientUid, input.doctorName, "prescription");
 }
 
 export async function createDietPlan(input: CreateDietPlanInput): Promise<void> {
@@ -681,6 +713,7 @@ export async function createDietPlan(input: CreateDietPlanInput): Promise<void> 
     imagePath: input.imagePath ?? null,
     createdAt: serverTimestamp(),
   });
+  await createCarePlanNotification(input.patientUid, input.doctorName, "diet-plan");
 }
 
 export async function createExerciseGoal(input: CreateExerciseGoalInput): Promise<void> {
@@ -699,6 +732,7 @@ export async function createExerciseGoal(input: CreateExerciseGoalInput): Promis
     text: input.text.trim(),
     createdAt: serverTimestamp(),
   });
+  await createCarePlanNotification(input.patientUid, input.doctorName, "exercise-goal");
 }
 
 export async function createMedicalNote(input: CreateMedicalNoteInput): Promise<void> {
@@ -718,13 +752,31 @@ export async function createMedicalNote(input: CreateMedicalNoteInput): Promise<
     items,
     createdAt: serverTimestamp(),
   });
+  await createCarePlanNotification(input.patientUid, input.doctorName, "medical-note");
 }
 
-export async function listCarePlansForPatient(patientUid: string): Promise<DoctorCarePlanDoc[]> {
-  const q = query(carePlansRef, where("patientUid", "==", patientUid));
-  const snap = await getDocs(q);
-  const items = snap.docs.map((d) => toDoctorCarePlanDoc(d));
-  return items.sort(sortPlansByCreatedDesc);
+export async function listCarePlansForPatient(
+  patientUid?: string,
+  patientId?: string
+): Promise<DoctorCarePlanDoc[]> {
+  const fetches: Promise<import("firebase/firestore").QuerySnapshot>[] = [];
+  if (patientUid) {
+    fetches.push(getDocs(query(carePlansRef, where("patientUid", "==", patientUid))));
+  }
+  if (patientId) {
+    fetches.push(getDocs(query(carePlansRef, where("patientId", "==", patientId))));
+  }
+  if (fetches.length === 0) return [];
+
+  const snaps = await Promise.all(fetches);
+  const byId = new Map<string, DoctorCarePlanDoc>();
+  for (const snap of snaps) {
+    for (const docSnap of snap.docs) {
+      const item = toDoctorCarePlanDoc(docSnap);
+      byId.set(item.id, item);
+    }
+  }
+  return Array.from(byId.values()).sort(sortPlansByCreatedDesc);
 }
 
 export async function addDoctorPrivateNote(input: CreateDoctorPrivateNoteInput): Promise<void> {

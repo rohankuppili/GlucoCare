@@ -168,7 +168,7 @@ const DoctorDashboard = ({ onLogout }: DoctorDashboardProps) => {
         const [metrics, notes, plans] = await Promise.all([
           listDailyHealthMetrics(selectedPatient.uid),
           doctorProfile?.uid ? listDoctorPrivateNotes(doctorProfile.uid, selectedPatient.uid) : Promise.resolve([]),
-          listCarePlansForPatient(selectedPatient.uid),
+          listCarePlansForPatient(selectedPatient.uid, selectedPatient.id),
         ]);
         if (!cancelled) {
           setSelectedPatientMetrics(metrics);
@@ -376,7 +376,7 @@ const DoctorDashboard = ({ onLogout }: DoctorDashboardProps) => {
 
   const refreshCarePlanData = async () => {
     if (!selectedPatient?.uid) return;
-    const plans = await listCarePlansForPatient(selectedPatient.uid);
+    const plans = await listCarePlansForPatient(selectedPatient.uid, selectedPatient.id);
     setCarePlans(doctorProfile?.uid ? plans.filter((p) => p.doctorUid === doctorProfile.uid) : plans);
   };
 

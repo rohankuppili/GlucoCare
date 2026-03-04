@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Activity, 
@@ -80,6 +80,7 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
   const [slotsLoading, setSlotsLoading] = useState(false);
   const [submittingAppointment, setSubmittingAppointment] = useState(false);
   const [openTrend, setOpenTrend] = useState<"bp" | "bpm" | "weight" | "hba1c" | null>(null);
+  const alertsSectionRef = useRef<HTMLDivElement | null>(null);
 
   const patientName = patientProfile ? `${patientProfile.firstName} ${patientProfile.lastName}`.trim() : "";
 
@@ -111,7 +112,7 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
         const [appointmentItems, notificationItems, carePlanItems] = await Promise.all([
           listAppointmentsForPatient(user.uid),
           listNotifications(user.uid),
-          listCarePlansForPatient(user.uid),
+          listCarePlansForPatient(user.uid, patientProfile?.patientId),
         ]);
         if (!cancelled) {
           setAppointments(appointmentItems);
@@ -127,7 +128,7 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
     return () => {
       cancelled = true;
     };
-  }, [user]);
+  }, [patientProfile?.patientId, user]);
 
   useEffect(() => {
     let cancelled = false;
@@ -362,6 +363,10 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
     }
   };
 
+  const handleBellClick = () => {
+    alertsSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
   return (
     <div className="min-h-screen bg-gradient-hero">
       {/* Header */}
@@ -379,11 +384,19 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
             </div>
 
             <div className="flex items-center gap-3">
-              <Button variant="glass" size="icon-lg" className="relative">
+              <Button
+                variant="glass"
+                size="icon-lg"
+                className="relative overflow-visible"
+                onClick={handleBellClick}
+                aria-label="Go to alerts and reminders"
+              >
                 <Bell className="w-6 h-6" />
-                <span className="absolute -top-1 -right-1 w-5 h-5 bg-danger text-danger-foreground rounded-full text-xs flex items-center justify-center">
-                  {unreadNotifications}
-                </span>
+                {unreadNotifications > 0 && (
+                  <span className="absolute top-0 right-0 z-10 min-w-5 h-5 px-1 translate-x-1/3 -translate-y-1/3 bg-danger text-danger-foreground rounded-full text-[10px] leading-none flex items-center justify-center">
+                    {unreadNotifications > 99 ? "99+" : unreadNotifications}
+                  </span>
+                )}
               </Button>
               <DeleteAccountButton
                 variant="ghost"
@@ -767,9 +780,11 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
 
           {/* Alerts Panel */}
           <motion.div
+            ref={alertsSectionRef}
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.5 }}
+            className="scroll-mt-28"
           >
             <AlertsPanel alerts={panelAlerts} />
           </motion.div>
@@ -783,33 +798,6 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
           className="mt-6"
         >
           <InsightsPanel insights={derivedInsights} />
-        </motion.div>
-
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.65 }}
-          className="mt-6"
-        >
-          <Card variant="glass">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Bell className="w-5 h-5 text-primary" />
-                Appointment Notifications
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {notifications.length === 0 && (
-                <p className="text-sm text-muted-foreground">No notifications yet.</p>
-              )}
-              {notifications.map((n) => (
-                <div key={n.id} className="rounded-lg border border-border/60 p-3">
-                  <p className="font-medium">{n.title}</p>
-                  <p className="text-sm text-muted-foreground">{n.message}</p>
-                </div>
-              ))}
-            </CardContent>
-          </Card>
         </motion.div>
 
         <Dialog open={openTrend !== null} onOpenChange={(open) => { if (!open) setOpenTrend(null); }}>

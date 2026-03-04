@@ -1,3 +1,4 @@
+import { useMemo, useState } from 'react';
 import { Bell, AlertTriangle, Calendar, Pill, ChevronRight } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -8,6 +9,16 @@ interface AlertsPanelProps {
 }
 
 const AlertsPanel = ({ alerts }: AlertsPanelProps) => {
+  const [showAll, setShowAll] = useState(false);
+
+  const sortedAlerts = useMemo(() => {
+    return [...alerts].sort(
+      (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+    );
+  }, [alerts]);
+
+  const visibleAlerts = showAll ? sortedAlerts : sortedAlerts.slice(0, 3);
+
   const getAlertIcon = (type: Alert['type']) => {
     switch (type) {
       case 'glucose-high':
@@ -41,14 +52,16 @@ const AlertsPanel = ({ alerts }: AlertsPanelProps) => {
             <Bell className="w-6 h-6 text-primary" />
             Alerts & Reminders
           </CardTitle>
-          <Button variant="ghost" size="sm">
-            View All
-            <ChevronRight className="w-4 h-4 ml-1" />
-          </Button>
+          {sortedAlerts.length > 3 && (
+            <Button variant="ghost" size="sm" onClick={() => setShowAll((prev) => !prev)}>
+              {showAll ? 'Show Less' : 'View All'}
+              <ChevronRight className="w-4 h-4 ml-1" />
+            </Button>
+          )}
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
-        {alerts.slice(0, 4).map((alert) => {
+        {visibleAlerts.map((alert) => {
           const Icon = getAlertIcon(alert.type);
           return (
             <div
@@ -75,7 +88,7 @@ const AlertsPanel = ({ alerts }: AlertsPanelProps) => {
           );
         })}
 
-        {alerts.length === 0 && (
+        {sortedAlerts.length === 0 && (
           <div className="text-center py-8 text-muted-foreground">
             <Bell className="w-12 h-12 mx-auto mb-3 opacity-30" />
             <p>No alerts at this time</p>
