@@ -59,8 +59,9 @@ const HbA1cChart = ({ readings }: HbA1cChartProps) => {
   };
 
   return (
-    <div className="h-64 w-full">
-      <ResponsiveContainer width="100%" height="100%">
+    <div className="w-full">
+      <div className="h-[240px] w-full">
+        <ResponsiveContainer width="100%" height="100%">
         <BarChart data={chartData} margin={{ top: 20, right: 30, left: 0, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
           
@@ -96,10 +97,11 @@ const HbA1cChart = ({ readings }: HbA1cChartProps) => {
             ))}
           </Bar>
         </BarChart>
-      </ResponsiveContainer>
+        </ResponsiveContainer>
+      </div>
 
       {/* Legend */}
-      <div className="flex justify-center gap-6 mt-4">
+      <div className="mt-3 flex flex-wrap items-center justify-center gap-x-5 gap-y-2 px-2 pb-1">
         <div className="flex items-center gap-2">
           <div className="w-3 h-3 rounded-full bg-success" />
           <span className="text-sm text-muted-foreground">&lt;5.7% Normal</span>

@@ -66,11 +66,12 @@ const GlucoseChart = ({ readings }: GlucoseChartProps) => {
   };
 
   return (
-    <div className="h-80 w-full">
-      <ResponsiveContainer width="100%" height="100%">
+    <div className="w-full">
+      <div className="h-[300px] w-full">
+        <ResponsiveContainer width="100%" height="100%">
         <LineChart
           data={chartData}
-          margin={{ top: 20, right: 30, left: 0, bottom: 0 }}
+          margin={{ top: 20, right: 30, left: 0, bottom: 16 }}
         >
           <defs>
             <linearGradient id="fastingGradient" x1="0" y1="0" x2="0" y2="1">
@@ -148,10 +149,11 @@ const GlucoseChart = ({ readings }: GlucoseChartProps) => {
             connectNulls
           />
         </LineChart>
-      </ResponsiveContainer>
+        </ResponsiveContainer>
+      </div>
       
       {/* Legend */}
-      <div className="flex justify-center gap-8 mt-4">
+      <div className="mt-3 flex flex-wrap items-center justify-center gap-x-6 gap-y-2 px-2 pb-1">
         <div className="flex items-center gap-2">
           <div className="w-3 h-3 rounded-full bg-primary" />
           <span className="text-sm text-muted-foreground">Fasting</span>

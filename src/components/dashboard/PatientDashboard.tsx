@@ -22,6 +22,12 @@ import {
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { 
   mockPatient, 
   mockAlerts, 
@@ -30,6 +36,8 @@ import {
 } from '@/data/mockData';
 import { getGlucoseStatus } from '@/types';
 import GlucoseChart from '@/components/charts/GlucoseChart';
+import HbA1cChart from '@/components/charts/HbA1cChart';
+import VitalsTrendChart from '@/components/charts/VitalsTrendChart';
 import MetricCard from '@/components/dashboard/MetricCard';
 import AlertsPanel from '@/components/dashboard/AlertsPanel';
 import InsightsPanel from '@/components/dashboard/InsightsPanel';
@@ -70,6 +78,7 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
   const [availableSlots, setAvailableSlots] = useState<TimeSlotOption[]>(buildDayTimeSlots());
   const [slotsLoading, setSlotsLoading] = useState(false);
   const [submittingAppointment, setSubmittingAppointment] = useState(false);
+  const [openTrend, setOpenTrend] = useState<"bp" | "bpm" | "weight" | "hba1c" | null>(null);
 
   const patientName = patientProfile ? `${patientProfile.firstName} ${patientProfile.lastName}`.trim() : "";
 
@@ -192,6 +201,17 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
       : '--';
   const latestHeartRate = latestDaily?.heartRate ?? '--';
   const unreadNotifications = notifications.filter((n) => !n.isRead).length;
+  const hba1cReadings = useMemo(() => {
+    const patientId = patientProfile?.patientId ?? user?.uid ?? "";
+    return dailyMetrics
+      .filter((m) => typeof m.hba1c === "number")
+      .map((m) => ({
+        id: `${m.id}-hba1c`,
+        patientId,
+        value: m.hba1c as number,
+        timestamp: `${m.date}T09:00:00`,
+      }));
+  }, [dailyMetrics, patientProfile?.patientId, user?.uid]);
 
   useEffect(() => {
     let cancelled = false;
@@ -443,6 +463,25 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
           />
         </motion.div>
 
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.22 }}
+          className="mb-8"
+        >
+          <Card variant="glass">
+            <CardHeader>
+              <CardTitle className="text-lg">More Health Graphs</CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-wrap gap-3">
+              <Button variant="outline" onClick={() => setOpenTrend("bp")}>View BP Graph</Button>
+              <Button variant="outline" onClick={() => setOpenTrend("bpm")}>View BPM Graph</Button>
+              <Button variant="outline" onClick={() => setOpenTrend("weight")}>View Weight Graph</Button>
+              <Button variant="outline" onClick={() => setOpenTrend("hba1c")}>View HbA1c Graph</Button>
+            </CardContent>
+          </Card>
+        </motion.div>
+
         {/* Quick Actions */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
@@ -629,6 +668,23 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
             </CardContent>
           </Card>
         </motion.div>
+
+        <Dialog open={openTrend !== null} onOpenChange={(open) => { if (!open) setOpenTrend(null); }}>
+          <DialogContent className="max-w-3xl">
+            <DialogHeader>
+              <DialogTitle>
+                {openTrend === "bp" && "Blood Pressure Trend"}
+                {openTrend === "bpm" && "Heart Rate Trend"}
+                {openTrend === "weight" && "Weight Trend"}
+                {openTrend === "hba1c" && "HbA1c Trend"}
+              </DialogTitle>
+            </DialogHeader>
+            {openTrend === "bp" && <VitalsTrendChart metric="blood-pressure" data={dailyMetrics} />}
+            {openTrend === "bpm" && <VitalsTrendChart metric="heart-rate" data={dailyMetrics} />}
+            {openTrend === "weight" && <VitalsTrendChart metric="weight" data={dailyMetrics} />}
+            {openTrend === "hba1c" && <HbA1cChart readings={hba1cReadings} />}
+          </DialogContent>
+        </Dialog>
       </main>
     </div>
   );

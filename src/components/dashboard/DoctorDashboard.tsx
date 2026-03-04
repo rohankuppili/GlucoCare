@@ -33,6 +33,7 @@ import {
 } from '@/data/mockData';
 import GlucoseChart from '@/components/charts/GlucoseChart';
 import HbA1cChart from '@/components/charts/HbA1cChart';
+import VitalsTrendChart from '@/components/charts/VitalsTrendChart';
 import MetricCard from '@/components/dashboard/MetricCard';
 import { useRoleBasedAuth } from '@/hooks/useRoleBasedAuth';
 import DeleteAccountButton from '@/components/auth/DeleteAccountButton';
@@ -67,6 +68,7 @@ const DoctorDashboard = ({ onLogout }: DoctorDashboardProps) => {
   const [scheduling, setScheduling] = useState(false);
   const [selectedPatientMetrics, setSelectedPatientMetrics] = useState<DailyHealthMetricsDoc[]>([]);
   const [selectedPatientMetricsLoading, setSelectedPatientMetricsLoading] = useState(false);
+  const [openTrend, setOpenTrend] = useState<"bp" | "bpm" | "weight" | "hba1c" | null>(null);
 
   const patientsForUI = useMemo(() => {
     return linkedPatients.map((p) => ({
@@ -500,6 +502,26 @@ const DoctorDashboard = ({ onLogout }: DoctorDashboardProps) => {
               </DialogContent>
             </Dialog>
 
+            <Dialog open={openTrend !== null} onOpenChange={(open) => { if (!open) setOpenTrend(null); }}>
+              <DialogContent className="max-w-3xl">
+                <DialogHeader>
+                  <DialogTitle>
+                    {openTrend === "bp" && "Blood Pressure Trend"}
+                    {openTrend === "bpm" && "Heart Rate Trend"}
+                    {openTrend === "weight" && "Weight Trend"}
+                    {openTrend === "hba1c" && "HbA1c Trend"}
+                  </DialogTitle>
+                  <DialogDescription>
+                    {selectedPatient ? `${selectedPatient.name} (${selectedPatient.id})` : ""}
+                  </DialogDescription>
+                </DialogHeader>
+                {openTrend === "bp" && <VitalsTrendChart metric="blood-pressure" data={selectedPatientMetrics} />}
+                {openTrend === "bpm" && <VitalsTrendChart metric="heart-rate" data={selectedPatientMetrics} />}
+                {openTrend === "weight" && <VitalsTrendChart metric="weight" data={selectedPatientMetrics} />}
+                {openTrend === "hba1c" && <HbA1cChart readings={hba1cReadings} />}
+              </DialogContent>
+            </Dialog>
+
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
@@ -631,6 +653,24 @@ const DoctorDashboard = ({ onLogout }: DoctorDashboardProps) => {
                 icon={Activity}
                 status="normal"
               />
+            </motion.div>
+
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.12 }}
+            >
+              <Card variant="glass">
+                <CardHeader>
+                  <CardTitle className="text-lg">Patient Log Graphs</CardTitle>
+                </CardHeader>
+                <CardContent className="flex flex-wrap gap-3">
+                  <Button variant="outline" onClick={() => setOpenTrend("bp")}>View BP Graph</Button>
+                  <Button variant="outline" onClick={() => setOpenTrend("bpm")}>View BPM Graph</Button>
+                  <Button variant="outline" onClick={() => setOpenTrend("weight")}>View Weight Graph</Button>
+                  <Button variant="outline" onClick={() => setOpenTrend("hba1c")}>View HbA1c Graph</Button>
+                </CardContent>
+              </Card>
             </motion.div>
 
             {/* Charts Row */}
