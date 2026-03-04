@@ -25,6 +25,18 @@ const doctorsRef = (uid: string) => doc(db, "doctors", uid);
 const patientDoctorLinksRef = (patientId: string, doctorUid: string) =>
   doc(db, "patientDoctorLinks", `${patientId}_${doctorUid}`);
 
+async function deletePatientDoctorLinksByPatientId(patientId: string): Promise<void> {
+  const q = query(collection(db, "patientDoctorLinks"), where("patientId", "==", patientId));
+  const snap = await getDocs(q);
+  await Promise.all(snap.docs.map((d) => deleteDoc(d.ref)));
+}
+
+async function deletePatientDoctorLinksByDoctorUid(doctorUid: string): Promise<void> {
+  const q = query(collection(db, "patientDoctorLinks"), where("doctorUid", "==", doctorUid));
+  const snap = await getDocs(q);
+  await Promise.all(snap.docs.map((d) => deleteDoc(d.ref)));
+}
+
 // ---- User Profile ----
 
 export async function getUserProfile(uid: string): Promise<UserProfile | null> {
@@ -43,6 +55,13 @@ export async function getPatientProfile(patientId: string): Promise<PatientProfi
   const snap = await getDoc(patientsRef(patientId));
   if (!snap.exists()) return null;
   return snap.data() as PatientProfile;
+}
+
+export async function getPatientProfileByUid(uid: string): Promise<PatientProfile | null> {
+  const q = query(collection(db, "patients"), where("uid", "==", uid));
+  const snap = await getDocs(q);
+  if (snap.empty) return null;
+  return snap.docs[0].data() as PatientProfile;
 }
 
 export async function createPatientProfile(patient: Omit<PatientProfile, "createdAt">): Promise<string> {
@@ -122,7 +141,18 @@ export async function getPatientsForDoctor(doctorUid: string): Promise<PatientPr
 
   const patientsPromises = patientIds.map((pid) => getPatientProfile(pid));
   const patients = await Promise.all(patientsPromises);
-  return patients.filter((p): p is PatientProfile => p !== null);
+  const resolvedPatients = patients.filter((p): p is PatientProfile => p !== null);
+
+  // Defensive dedupe: if legacy data has multiple patientIds for one uid,
+  // show only one row per unique patient account in doctor dashboards.
+  const byUid = new Map<string, PatientProfile>();
+  for (const patient of resolvedPatients) {
+    if (!byUid.has(patient.uid)) {
+      byUid.set(patient.uid, patient);
+    }
+  }
+
+  return Array.from(byUid.values());
 }
 
 export async function getFamilyMemberForPatient(patientId: string): Promise<FamilyMemberProfile | null> {
@@ -154,6 +184,31 @@ export async function getDoctorByDoctorId(doctorId: string): Promise<DoctorProfi
   const snap = await getDocs(q);
   if (snap.empty) return null;
   return snap.docs[0].data() as DoctorProfile;
+}
+
+// ---- Account deletion cleanup ----
+
+export async function deleteUserData(uid: string): Promise<void> {
+  // Clean up patient profile(s) owned by this auth account and their link docs.
+  const patientsByUidQ = query(collection(db, "patients"), where("uid", "==", uid));
+  const patientsByUidSnap = await getDocs(patientsByUidQ);
+  await Promise.all(
+    patientsByUidSnap.docs.map(async (patientDoc) => {
+      const patientId = (patientDoc.data() as PatientProfile).patientId;
+      await deletePatientDoctorLinksByPatientId(patientId);
+      await deleteDoc(patientDoc.ref);
+    })
+  );
+
+  // If user is a doctor, remove doctor profile and all doctor-patient links.
+  await deletePatientDoctorLinksByDoctorUid(uid);
+  await deleteDoc(doctorsRef(uid));
+
+  // If user is a family member, remove family mapping.
+  await deleteDoc(familyMembersRef(uid));
+
+  // Finally remove the primary auth user profile.
+  await deleteDoc(usersRef(uid));
 }
 
 // ---- Helper: generate a readable patient ID ----

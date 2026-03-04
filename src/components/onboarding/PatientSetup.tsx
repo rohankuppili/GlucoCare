@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { User, Copy } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -12,6 +12,7 @@ import {
   generatePatientId,
   getDoctorByDoctorId,
   getPatientProfile,
+  getPatientProfileByUid,
   linkPatientToDoctor,
 } from "@/lib/roles";
 import { UserRole } from "@/types/roles";
@@ -31,13 +32,14 @@ export default function PatientSetup({ onComplete }: PatientSetupProps) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Pre-fill names from Google displayName on first render if possible
-  // (kept simple: split by first space)
-  if (user && !firstName && !lastName && user.displayName) {
+  useEffect(() => {
+    if (!user?.displayName) return;
+    if (firstName || lastName) return;
+
     const parts = user.displayName.split(" ");
     setFirstName(parts[0] || "");
     setLastName(parts.slice(1).join(" ") || "");
-  }
+  }, [user?.displayName, firstName, lastName]);
 
   const handleGenerateId = () => {
     setPatientId(generatePatientId());
@@ -86,10 +88,10 @@ export default function PatientSetup({ onComplete }: PatientSetupProps) {
       return;
     }
 
-    if (!patientId) {
-      setPatientId(generatePatientId());
-    }
     const finalPatientId = (patientId || generatePatientId()).toUpperCase();
+    if (!patientId) {
+      setPatientId(finalPatientId);
+    }
 
     setSubmitting(true);
     try {
@@ -97,6 +99,28 @@ export default function PatientSetup({ onComplete }: PatientSetupProps) {
       const doctor = await getDoctorByDoctorId(trimmedDoctorId.toUpperCase());
       if (!doctor) {
         setError("Doctor ID not found. Please check and try again.");
+        return;
+      }
+
+      // Idempotency guard: same Google account should map to one patient profile.
+      const existingForUid = await getPatientProfileByUid(user.uid);
+      if (existingForUid) {
+        await linkPatientToDoctor(existingForUid.patientId, doctor.uid);
+
+        await setUserProfile(user.uid, {
+          email: user.email!,
+          firstName: trimmedFirst,
+          lastName: trimmedLast,
+          dob: trimmedDob,
+          phone: digits,
+          displayName: user.displayName || undefined,
+          photoURL: user.photoURL || undefined,
+          role: "patient" as UserRole,
+          onboarded: true,
+          primaryPatientId: existingForUid.patientId,
+        });
+
+        onComplete();
         return;
       }
 

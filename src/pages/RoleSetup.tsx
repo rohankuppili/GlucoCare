@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { User, Users, Stethoscope, ArrowLeft } from "lucide-react";
+import { User, Users, Stethoscope, ArrowLeft, Home } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import PatientSetup from "@/components/onboarding/PatientSetup";
@@ -20,13 +20,15 @@ interface RoleSetupProps {
 export default function RoleSetup({ initialRole, onComplete, onBack }: RoleSetupProps) {
   const { loading } = useRoleBasedAuth();
   const [view, setView] = useState<RoleSetupView>("select");
+  const [autoSelected, setAutoSelected] = useState(false);
 
-  // If a role is preselected (e.g., coming from landing role selection), skip the select screen.
+  // Auto-select preselected role only once so users can still navigate back to role selection.
   useEffect(() => {
-    if (view === "select" && initialRole) {
+    if (!autoSelected && view === "select" && initialRole) {
       setView(initialRole);
+      setAutoSelected(true);
     }
-  }, [initialRole, view]);
+  }, [autoSelected, initialRole, view]);
 
   if (loading) {
     return (
@@ -39,12 +41,18 @@ export default function RoleSetup({ initialRole, onComplete, onBack }: RoleSetup
   if (view === "patient") {
     return (
       <div>
-        {onBack && (
-          <Button variant="ghost" onClick={() => setView("select")} className="mb-4">
+        <div className="mb-4 flex items-center gap-2">
+          <Button variant="ghost" onClick={() => setView("select")}>
             <ArrowLeft className="w-4 h-4 mr-2" />
             Back
           </Button>
-        )}
+          {onBack && (
+            <Button variant="outline" onClick={onBack}>
+              <Home className="w-4 h-4 mr-2" />
+              Back to Home
+            </Button>
+          )}
+        </div>
         <PatientSetup onComplete={onComplete} />
       </div>
     );
@@ -53,12 +61,18 @@ export default function RoleSetup({ initialRole, onComplete, onBack }: RoleSetup
   if (view === "family") {
     return (
       <div>
-        {onBack && (
-          <Button variant="ghost" onClick={() => setView("select")} className="mb-4">
+        <div className="mb-4 flex items-center gap-2">
+          <Button variant="ghost" onClick={() => setView("select")}>
             <ArrowLeft className="w-4 h-4 mr-2" />
             Back
           </Button>
-        )}
+          {onBack && (
+            <Button variant="outline" onClick={onBack}>
+              <Home className="w-4 h-4 mr-2" />
+              Back to Home
+            </Button>
+          )}
+        </div>
         <FamilyLink onComplete={onComplete} />
       </div>
     );
@@ -67,12 +81,18 @@ export default function RoleSetup({ initialRole, onComplete, onBack }: RoleSetup
   if (view === "doctor") {
     return (
       <div>
-        {onBack && (
-          <Button variant="ghost" onClick={() => setView("select")} className="mb-4">
+        <div className="mb-4 flex items-center gap-2">
+          <Button variant="ghost" onClick={() => setView("select")}>
             <ArrowLeft className="w-4 h-4 mr-2" />
             Back
           </Button>
-        )}
+          {onBack && (
+            <Button variant="outline" onClick={onBack}>
+              <Home className="w-4 h-4 mr-2" />
+              Back to Home
+            </Button>
+          )}
+        </div>
         <DoctorSetup onComplete={onComplete} />
       </div>
     );
@@ -88,40 +108,48 @@ export default function RoleSetup({ initialRole, onComplete, onBack }: RoleSetup
       <Card variant="glass" className="max-w-lg w-full">
         <CardHeader>
           <CardTitle className="text-2xl text-center">Choose Your Role</CardTitle>
+          {onBack && (
+            <div className="pt-2">
+              <Button variant="outline" onClick={onBack} className="w-full">
+                <Home className="w-4 h-4 mr-2" />
+                Back to Home
+              </Button>
+            </div>
+          )}
         </CardHeader>
         <CardContent className="space-y-4">
           <Button
             variant="outline"
-            className="w-full h-20 flex-col gap-2"
+            className="w-full min-h-[120px] h-auto py-5 px-5 flex-col items-center justify-center gap-2 text-center whitespace-normal"
             onClick={() => setView("patient")}
           >
-            <User className="w-8 h-8" />
-            <span className="font-semibold">Patient</span>
-            <span className="text-sm text-muted-foreground">
+            <User className="w-7 h-7 shrink-0" />
+            <span className="font-semibold text-xl leading-tight">Patient</span>
+            <span className="text-sm text-muted-foreground leading-snug max-w-[28rem]">
               Manage your glucose readings and health data
             </span>
           </Button>
 
           <Button
             variant="outline"
-            className="w-full h-20 flex-col gap-2"
+            className="w-full min-h-[120px] h-auto py-5 px-5 flex-col items-center justify-center gap-2 text-center whitespace-normal"
             onClick={() => setView("family")}
           >
-            <Users className="w-8 h-8" />
-            <span className="font-semibold">Family Member / Caretaker</span>
-            <span className="text-sm text-muted-foreground">
+            <Users className="w-7 h-7 shrink-0" />
+            <span className="font-semibold text-xl leading-tight">Family Member / Caretaker</span>
+            <span className="text-sm text-muted-foreground leading-snug max-w-[28rem]">
               Monitor a patient's data with their Patient ID
             </span>
           </Button>
 
           <Button
             variant="outline"
-            className="w-full h-20 flex-col gap-2"
+            className="w-full min-h-[120px] h-auto py-5 px-5 flex-col items-center justify-center gap-2 text-center whitespace-normal"
             onClick={() => setView("doctor")}
           >
-            <Stethoscope className="w-8 h-8" />
-            <span className="font-semibold">Doctor</span>
-            <span className="text-sm text-muted-foreground">
+            <Stethoscope className="w-7 h-7 shrink-0" />
+            <span className="font-semibold text-xl leading-tight">Doctor</span>
+            <span className="text-sm text-muted-foreground leading-snug max-w-[28rem]">
               View and manage multiple patients
             </span>
           </Button>

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { Users, Link } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -23,11 +23,14 @@ export default function FamilyLink({ onComplete }: FamilyLinkProps) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
-  if (user && !firstName && !lastName && user.displayName) {
+  useEffect(() => {
+    if (!user?.displayName) return;
+    if (firstName || lastName) return;
+
     const parts = user.displayName.split(" ");
     setFirstName(parts[0] || "");
     setLastName(parts.slice(1).join(" ") || "");
-  }
+  }, [user?.displayName, firstName, lastName]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

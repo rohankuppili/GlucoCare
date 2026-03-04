@@ -102,6 +102,7 @@ const Index = () => {
             await refreshProfile();
             setCurrentView('dashboard');
           }}
+          onBack={handleLogout}
         />
       </div>
     );

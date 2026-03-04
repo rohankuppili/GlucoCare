@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { Stethoscope, Copy } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -24,12 +24,14 @@ export default function DoctorSetup({ onComplete }: DoctorSetupProps) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Pre-fill names from Google displayName on first render if possible
-  if (user && !firstName && !lastName && user.displayName) {
+  useEffect(() => {
+    if (!user?.displayName) return;
+    if (firstName || lastName) return;
+
     const parts = user.displayName.split(" ");
     setFirstName(parts[0] || "");
     setLastName(parts.slice(1).join(" ") || "");
-  }
+  }, [user?.displayName, firstName, lastName]);
 
   const generateDoctorId = () => {
     const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -40,9 +42,10 @@ export default function DoctorSetup({ onComplete }: DoctorSetupProps) {
     return `DR-${result}`;
   };
 
-  if (!doctorId) {
+  useEffect(() => {
+    if (doctorId) return;
     setDoctorId(generateDoctorId());
-  }
+  }, [doctorId]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

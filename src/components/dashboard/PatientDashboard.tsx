@@ -12,6 +12,7 @@ import {
   Utensils,
   Footprints,
   Clock,
+  Calendar,
   ChevronRight,
   Phone,
   LogOut,
@@ -20,11 +21,11 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
 import { 
   mockPatient, 
   mockAlerts, 
   mockHealthInsights,
-  mockVitalReadings,
   calculateGlucoseStats 
 } from '@/data/mockData';
 import { getGlucoseStatus } from '@/types';
@@ -34,7 +35,22 @@ import AlertsPanel from '@/components/dashboard/AlertsPanel';
 import InsightsPanel from '@/components/dashboard/InsightsPanel';
 import { useAuthUser } from '@/hooks/useAuthUser';
 import { useRoleBasedAuth } from '@/hooks/useRoleBasedAuth';
-import { listGlucoseReadings, type GlucoseReadingDoc } from '@/lib/firestore';
+import {
+  buildDayTimeSlots,
+  createAppointmentRequest,
+  listAvailableAppointmentSlotsForDoctor,
+  listAppointmentsForPatient,
+  listDailyHealthMetrics,
+  listNotifications,
+  type AppointmentDoc,
+  type DailyHealthMetricsDoc,
+  type NotificationDoc,
+  type TimeSlotOption,
+} from '@/lib/firestore';
+import DeleteAccountButton from '@/components/auth/DeleteAccountButton';
+import { getDoctorForPatient } from '@/lib/roles';
+import { toast } from 'sonner';
+import LogDailyHealthDialog from '@/components/health/LogDailyHealthDialog';
 
 interface PatientDashboardProps {
   onLogout: () => void;
@@ -44,8 +60,16 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
   const [activeTab, setActiveTab] = useState<'overview' | 'glucose' | 'diet' | 'activity'>('overview');
   const { user } = useAuthUser();
   const { loading: roleLoading, patientProfile } = useRoleBasedAuth();
-  const [glucoseReadings, setGlucoseReadings] = useState<GlucoseReadingDoc[]>([]);
-  const [glucoseLoading, setGlucoseLoading] = useState(true);
+  const [dailyMetrics, setDailyMetrics] = useState<DailyHealthMetricsDoc[]>([]);
+  const [dailyMetricsLoading, setDailyMetricsLoading] = useState(true);
+  const [appointments, setAppointments] = useState<AppointmentDoc[]>([]);
+  const [notifications, setNotifications] = useState<NotificationDoc[]>([]);
+  const [doctorDetails, setDoctorDetails] = useState<{ uid: string; doctorId: string; name: string } | null>(null);
+  const [appointmentDate, setAppointmentDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [appointmentTime, setAppointmentTime] = useState("");
+  const [availableSlots, setAvailableSlots] = useState<TimeSlotOption[]>(buildDayTimeSlots());
+  const [slotsLoading, setSlotsLoading] = useState(false);
+  const [submittingAppointment, setSubmittingAppointment] = useState(false);
 
   const patientName = patientProfile ? `${patientProfile.firstName} ${patientProfile.lastName}`.trim() : "";
 
@@ -54,11 +78,11 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
 
     async function load() {
       if (!user) return;
-      setGlucoseLoading(true);
-      const readings = await listGlucoseReadings(user.uid);
+      setDailyMetricsLoading(true);
+      const readings = await listDailyHealthMetrics(user.uid);
       if (cancelled) return;
-      setGlucoseReadings(readings);
-      setGlucoseLoading(false);
+      setDailyMetrics(readings);
+      setDailyMetricsLoading(false);
     }
 
     load();
@@ -68,36 +92,92 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
     };
   }, [user]);
 
-  const stats = useMemo(() => {
-    const converted = glucoseReadings.map((r) => ({
-      id: r.id,
-      patientId: user?.uid ?? "",
-      value: r.value,
-      unit: r.unit,
-      type: r.type,
-      timestamp: r.timestamp.toISOString(),
-      notes: r.notes,
-    }));
-    return calculateGlucoseStats(converted);
-  }, [glucoseReadings, user?.uid]);
+  useEffect(() => {
+    let cancelled = false;
 
-  const latestGlucose = glucoseReadings[0];
-  const glucoseStatus = latestGlucose ? getGlucoseStatus(latestGlucose.value) : 'normal';
+    async function loadAppointmentData() {
+      if (!user) return;
+      try {
+        const [appointmentItems, notificationItems] = await Promise.all([
+          listAppointmentsForPatient(user.uid),
+          listNotifications(user.uid),
+        ]);
+        if (!cancelled) {
+          setAppointments(appointmentItems);
+          setNotifications(notificationItems);
+        }
+      } catch (error) {
+        if (!cancelled) toast.error("Failed to load appointment data.");
+      }
+    }
+
+    loadAppointmentData();
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadDoctor() {
+      if (!patientProfile?.patientId) {
+        setDoctorDetails(null);
+        return;
+      }
+      try {
+        const doctor = await getDoctorForPatient(patientProfile.patientId);
+        if (!cancelled && doctor) {
+          setDoctorDetails({
+            uid: doctor.uid,
+            doctorId: doctor.doctorId,
+            name: `${doctor.firstName} ${doctor.lastName}`.trim() || doctor.doctorId,
+          });
+        }
+      } catch (error) {
+        if (!cancelled) toast.error("Failed to load linked doctor.");
+      }
+    }
+
+    loadDoctor();
+    return () => {
+      cancelled = true;
+    };
+  }, [patientProfile?.patientId]);
 
   const chartReadings = useMemo(() => {
-    return glucoseReadings
+    const patientId = patientProfile?.patientId ?? user?.uid ?? "";
+    const entries = dailyMetrics
       .slice()
-      .reverse()
-      .map((r) => ({
-        id: r.id,
-        patientId: user?.uid ?? "",
-        value: r.value,
-        unit: r.unit,
-        type: r.type,
-        timestamp: r.timestamp.toISOString(),
-        notes: r.notes,
-      }));
-  }, [glucoseReadings, user?.uid]);
+      .sort((a, b) => a.date.localeCompare(b.date))
+      .flatMap((m) => [
+        {
+          id: `${m.id}-f`,
+          patientId,
+          value: m.fastingGlucose,
+          unit: 'mg/dL' as const,
+          type: 'fasting' as const,
+          timestamp: `${m.date}T07:00:00`,
+          notes: m.notes,
+        },
+        {
+          id: `${m.id}-p`,
+          patientId,
+          value: m.postMealGlucose,
+          unit: 'mg/dL' as const,
+          type: 'post-meal' as const,
+          timestamp: `${m.date}T13:00:00`,
+          notes: m.notes,
+        },
+      ]);
+    return entries;
+  }, [dailyMetrics, patientProfile?.patientId, user?.uid]);
+
+  const stats = useMemo(() => calculateGlucoseStats(chartReadings), [chartReadings]);
+
+  const latestDaily = dailyMetrics[0];
+  const latestGlucoseValue = latestDaily?.postMealGlucose ?? latestDaily?.fastingGlucose;
+  const glucoseStatus = latestGlucoseValue ? getGlucoseStatus(latestGlucoseValue) : 'normal';
 
   const getGreeting = () => {
     const hour = new Date().getHours();
@@ -106,9 +186,100 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
     return 'Good Evening';
   };
 
-  const bloodPressure = mockVitalReadings.find(v => v.type === 'blood-pressure');
-  const heartRate = mockVitalReadings.find(v => v.type === 'heart-rate');
-  const weight = mockVitalReadings.find(v => v.type === 'weight');
+  const latestBloodPressure =
+    latestDaily?.bloodPressureSystolic && latestDaily?.bloodPressureDiastolic
+      ? `${latestDaily.bloodPressureSystolic}/${latestDaily.bloodPressureDiastolic}`
+      : '--';
+  const latestHeartRate = latestDaily?.heartRate ?? '--';
+  const unreadNotifications = notifications.filter((n) => !n.isRead).length;
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadFreeSlots() {
+      if (!doctorDetails?.uid || !appointmentDate) {
+        setAvailableSlots([]);
+        return;
+      }
+      setSlotsLoading(true);
+      try {
+        const slots = await listAvailableAppointmentSlotsForDoctor(doctorDetails.uid, appointmentDate);
+        if (cancelled) return;
+        setAvailableSlots(slots);
+        if (!slots.some((s) => s.value === appointmentTime)) {
+          setAppointmentTime(slots[0]?.value ?? "");
+        }
+      } catch (error) {
+        if (!cancelled) toast.error("Failed to load free time slots.");
+      } finally {
+        if (!cancelled) setSlotsLoading(false);
+      }
+    }
+
+    loadFreeSlots();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [doctorDetails?.uid, appointmentDate]);
+
+  const upcomingVisits = useMemo(() => {
+    const now = Date.now();
+    return appointments
+      .filter((a) => a.status === 'approved' && a.scheduledAt.getTime() >= now)
+      .sort((a, b) => a.scheduledAt.getTime() - b.scheduledAt.getTime())
+      .slice(0, 8);
+  }, [appointments]);
+
+  const handleRequestAppointment = async () => {
+    if (!user || !patientProfile || !doctorDetails) {
+      toast.error("Doctor link not found for appointment booking.");
+      return;
+    }
+    if (!appointmentDate || !appointmentTime) {
+      toast.error("Please select date and time slot.");
+      return;
+    }
+    const selectedDateTime = new Date(`${appointmentDate}T${appointmentTime}:00`);
+    if (selectedDateTime.getTime() < Date.now()) {
+      toast.error("Please choose a future date/time.");
+      return;
+    }
+
+    const selectedSlot = availableSlots.find((s) => s.value === appointmentTime);
+    if (!selectedSlot) {
+      toast.error("Invalid appointment slot selected.");
+      return;
+    }
+
+    setSubmittingAppointment(true);
+    try {
+      await createAppointmentRequest({
+        patientUid: user.uid,
+        patientId: patientProfile.patientId,
+        patientName: patientName || patientProfile.patientId,
+        doctorUid: doctorDetails.uid,
+        doctorId: doctorDetails.doctorId,
+        doctorName: doctorDetails.name,
+        date: appointmentDate,
+        time: appointmentTime,
+        slotLabel: selectedSlot.label,
+      });
+      const appointmentItems = await listAppointmentsForPatient(user.uid);
+      setAppointments(appointmentItems);
+      const slots = await listAvailableAppointmentSlotsForDoctor(doctorDetails.uid, appointmentDate);
+      setAvailableSlots(slots);
+      if (!slots.some((s) => s.value === appointmentTime)) {
+        setAppointmentTime(slots[0]?.value ?? "");
+      }
+      toast.success("Appointment request sent.");
+    } catch (error: unknown) {
+      const message = (error as { message?: string })?.message ?? "Failed to request appointment.";
+      toast.error(message);
+    } finally {
+      setSubmittingAppointment(false);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-gradient-hero">
@@ -130,9 +301,15 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
               <Button variant="glass" size="icon-lg" className="relative">
                 <Bell className="w-6 h-6" />
                 <span className="absolute -top-1 -right-1 w-5 h-5 bg-danger text-danger-foreground rounded-full text-xs flex items-center justify-center">
-                  {mockAlerts.filter(a => !a.isRead).length}
+                  {unreadNotifications}
                 </span>
               </Button>
+              <DeleteAccountButton
+                variant="ghost"
+                size="icon-lg"
+                iconOnly
+                className="text-destructive hover:text-destructive"
+              />
               <Button variant="glass" size="icon-lg">
                 <Settings className="w-6 h-6" />
               </Button>
@@ -179,7 +356,7 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
                       glucoseStatus === 'high' || glucoseStatus === 'critical' ? 'text-danger' :
                       'text-glucose-low'
                     }`}>
-                      {latestGlucose?.value ?? '--'}
+                      {latestGlucoseValue ?? '--'}
                     </span>
                     <span className="text-2xl text-muted-foreground">mg/dL</span>
                   </div>
@@ -204,12 +381,20 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
                 </div>
 
                 <div className="flex flex-col gap-3">
-                  <Button variant="hero" size="lg">
-                    <Plus className="w-5 h-5 mr-2" />
-                    Log New Reading
-                  </Button>
+                  <LogDailyHealthDialog
+                    onSaved={async () => {
+                      if (!user) return;
+                      const readings = await listDailyHealthMetrics(user.uid);
+                      setDailyMetrics(readings);
+                    }}
+                  >
+                    <Button variant="hero" size="lg">
+                      <Plus className="w-5 h-5 mr-2" />
+                      Log Daily Health
+                    </Button>
+                  </LogDailyHealthDialog>
                   <p className="text-sm text-muted-foreground text-center">
-                    Last updated: {latestGlucose ? latestGlucose.timestamp.toLocaleTimeString() : '--'}
+                    Last updated: {latestDaily ? latestDaily.date : '--'}
                   </p>
                 </div>
               </div>
@@ -244,14 +429,14 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
           />
           <MetricCard
             title="Blood Pressure"
-            value={bloodPressure ? `${(bloodPressure.value as { systolic: number }).systolic}/${(bloodPressure.value as { diastolic: number }).diastolic}` : '--'}
+            value={latestBloodPressure}
             unit="mmHg"
             icon={Heart}
             status="normal"
           />
           <MetricCard
             title="Heart Rate"
-            value={heartRate?.value as number || '--'}
+            value={latestHeartRate}
             unit="bpm"
             icon={Activity}
             status="normal"
@@ -284,6 +469,83 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
               </CardContent>
             </Card>
           ))}
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.35 }}
+          className="grid lg:grid-cols-2 gap-6 mb-8"
+        >
+          <Card variant="glass">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Calendar className="w-5 h-5 text-primary" />
+                Request Appointment
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                Linked doctor: {doctorDetails ? `Dr. ${doctorDetails.name} (${doctorDetails.doctorId})` : "Not linked"}
+              </p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-sm font-medium">Date</label>
+                  <Input
+                    type="date"
+                    min={new Date().toISOString().split('T')[0]}
+                    value={appointmentDate}
+                    onChange={(e) => setAppointmentDate(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium">Time Slot (30 min)</label>
+                  <select
+                    className="w-full h-12 rounded-xl border border-input bg-background px-3 text-base"
+                    value={appointmentTime}
+                    onChange={(e) => setAppointmentTime(e.target.value)}
+                    disabled={slotsLoading || availableSlots.length === 0}
+                  >
+                    {availableSlots.map((slot) => (
+                      <option key={slot.value} value={slot.value}>
+                        {slot.label}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {slotsLoading ? "Loading free slots..." : availableSlots.length === 0 ? "No free slots for this date." : "Only doctor-free slots are shown."}
+                  </p>
+                </div>
+              </div>
+              <Button
+                variant="hero"
+                onClick={handleRequestAppointment}
+                disabled={!doctorDetails || submittingAppointment || slotsLoading || availableSlots.length === 0}
+              >
+                {submittingAppointment ? "Submitting..." : "Request Appointment"}
+              </Button>
+            </CardContent>
+          </Card>
+
+          <Card variant="glass">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Clock className="w-5 h-5 text-primary" />
+                Upcoming Visits
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {upcomingVisits.length === 0 && (
+                <p className="text-sm text-muted-foreground">No upcoming approved visits.</p>
+              )}
+              {upcomingVisits.map((appt) => (
+                <div key={appt.id} className="rounded-lg border border-border/60 p-3">
+                  <p className="font-medium">Dr. {appt.doctorName || appt.doctorId}</p>
+                  <p className="text-sm text-muted-foreground">{appt.date} • {appt.slotLabel}</p>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
         </motion.div>
 
         {/* Charts and Insights Grid */}
@@ -339,6 +601,33 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
           className="mt-6"
         >
           <InsightsPanel insights={mockHealthInsights} />
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.65 }}
+          className="mt-6"
+        >
+          <Card variant="glass">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Bell className="w-5 h-5 text-primary" />
+                Appointment Notifications
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {notifications.length === 0 && (
+                <p className="text-sm text-muted-foreground">No notifications yet.</p>
+              )}
+              {notifications.map((n) => (
+                <div key={n.id} className="rounded-lg border border-border/60 p-3">
+                  <p className="font-medium">{n.title}</p>
+                  <p className="text-sm text-muted-foreground">{n.message}</p>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
         </motion.div>
       </main>
     </div>

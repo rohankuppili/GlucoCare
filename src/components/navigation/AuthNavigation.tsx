@@ -1,10 +1,10 @@
 import React from "react";
-import { useNavigate, useLocation } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { useAuthUser } from "@/hooks/useAuthUser";
 import { useRoleBasedAuth } from "@/hooks/useRoleBasedAuth";
 import SignOutButton from "@/components/auth/SignOutButton";
-import UserProfileCard from "@/components/auth/UserProfileCard";
+import DeleteAccountButton from "@/components/auth/DeleteAccountButton";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -14,13 +14,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { User, Settings, LogOut, Home, Users, Stethoscope } from "lucide-react";
+import { User, Settings, Home, Users, Stethoscope } from "lucide-react";
 
 export default function AuthNavigation() {
   const { user } = useAuthUser();
   const { role } = useRoleBasedAuth();
   const navigate = useNavigate();
-  const location = useLocation();
 
   if (!user) {
     return (
@@ -103,6 +102,11 @@ export default function AuthNavigation() {
         <DropdownMenuItem asChild>
           <div className="w-full">
             <SignOutButton variant="ghost" />
+          </div>
+        </DropdownMenuItem>
+        <DropdownMenuItem asChild>
+          <div className="w-full">
+            <DeleteAccountButton variant="destructive" />
           </div>
         </DropdownMenuItem>
       </DropdownMenuContent>

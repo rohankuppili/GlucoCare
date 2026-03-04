@@ -33,6 +33,7 @@ import { getGlucoseStatus } from '@/types';
 import GlucoseChart from '@/components/charts/GlucoseChart';
 import MetricCard from '@/components/dashboard/MetricCard';
 import { useRoleBasedAuth } from '@/hooks/useRoleBasedAuth';
+import DeleteAccountButton from '@/components/auth/DeleteAccountButton';
 
 interface FamilyDashboardProps {
   onLogout: () => void;
@@ -93,6 +94,12 @@ const FamilyDashboard = ({ onLogout }: FamilyDashboardProps) => {
                   </span>
                 )}
               </Button>
+              <DeleteAccountButton
+                variant="ghost"
+                size="icon-lg"
+                iconOnly
+                className="text-destructive hover:text-destructive"
+              />
               <Button variant="ghost" size="icon-lg" onClick={onLogout}>
                 <LogOut className="w-6 h-6" />
               </Button>
