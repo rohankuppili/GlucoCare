@@ -88,6 +88,7 @@ export type DailyHealthMetricsInput = {
   heartRate?: number;
   weight?: number;
   hba1c?: number;
+  caloriesBurned?: number;
   notes?: string;
 };
 
@@ -132,6 +133,7 @@ export async function upsertDailyHealthMetrics(uid: string, input: DailyHealthMe
     heartRate: normalizeOptionalNumber(input.heartRate),
     weight: normalizeOptionalNumber(input.weight),
     hba1c: normalizeOptionalNumber(input.hba1c),
+    caloriesBurned: normalizeOptionalNumber(input.caloriesBurned),
     notes: input.notes?.trim() || null,
     updatedAt: serverTimestamp(),
   };
@@ -166,9 +168,76 @@ export async function listDailyHealthMetrics(uid: string): Promise<DailyHealthMe
       heartRate: typeof data.heartRate === "number" ? data.heartRate : undefined,
       weight: typeof data.weight === "number" ? data.weight : undefined,
       hba1c: typeof data.hba1c === "number" ? data.hba1c : undefined,
+      caloriesBurned: typeof data.caloriesBurned === "number" ? data.caloriesBurned : undefined,
       notes: typeof data.notes === "string" ? data.notes : undefined,
       createdAt: parseFirestoreDate(data.createdAt),
       updatedAt: parseFirestoreDate(data.updatedAt),
+    };
+  });
+}
+
+export type ActivityLogSource = "quick-action" | "daily-health";
+
+export type ActivityLogInput = {
+  date: string; // YYYY-MM-DD
+  caloriesBurned: number;
+  source: ActivityLogSource;
+};
+
+export type ActivityLogDoc = ActivityLogInput & {
+  id: string;
+  uid: string;
+  createdAt?: Date;
+  updatedAt?: Date;
+  loggedAt?: Date;
+};
+
+const activityLogsRef = (uid: string) => collection(db, "users", uid, "activityLogs");
+
+export async function upsertActivityLog(uid: string, input: ActivityLogInput): Promise<void> {
+  if (!input.date) {
+    throw new Error("Date is required.");
+  }
+  if (!Number.isFinite(input.caloriesBurned) || input.caloriesBurned <= 0) {
+    throw new Error("Calories burned must be a positive number.");
+  }
+
+  const q = query(activityLogsRef(uid), where("date", "==", input.date), limit(1));
+  const existing = await getDocs(q);
+  const payload = {
+    uid,
+    date: input.date,
+    caloriesBurned: Math.round(input.caloriesBurned),
+    source: input.source,
+    updatedAt: serverTimestamp(),
+    loggedAt: serverTimestamp(),
+  };
+
+  if (!existing.empty) {
+    await updateDoc(existing.docs[0].ref, payload);
+    return;
+  }
+
+  await addDoc(activityLogsRef(uid), {
+    ...payload,
+    createdAt: serverTimestamp(),
+  });
+}
+
+export async function listActivityLogs(uid: string): Promise<ActivityLogDoc[]> {
+  const q = query(activityLogsRef(uid), orderBy("loggedAt", "desc"));
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => {
+    const raw = d.data() as Record<string, unknown>;
+    return {
+      id: d.id,
+      uid: String(raw.uid ?? uid),
+      date: String(raw.date ?? ""),
+      caloriesBurned: Number(raw.caloriesBurned ?? 0),
+      source: (raw.source as ActivityLogSource) ?? "quick-action",
+      createdAt: parseFirestoreDate(raw.createdAt),
+      updatedAt: parseFirestoreDate(raw.updatedAt),
+      loggedAt: parseFirestoreDate(raw.loggedAt),
     };
   });
 }

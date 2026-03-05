@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/dialog";
 import { useAuthUser } from "@/hooks/useAuthUser";
 import { toast } from "sonner";
-import { upsertDailyHealthMetrics } from "@/lib/firestore";
+import { upsertActivityLog, upsertDailyHealthMetrics } from "@/lib/firestore";
 
 interface LogDailyHealthDialogProps {
   children?: React.ReactNode;
@@ -33,6 +33,7 @@ export default function LogDailyHealthDialog({ children, onSaved }: LogDailyHeal
     heartRate: "",
     weight: "",
     hba1c: "",
+    caloriesBurned: "",
     notes: "",
   });
 
@@ -64,8 +65,17 @@ export default function LogDailyHealthDialog({ children, onSaved }: LogDailyHeal
         heartRate: parseOptionalNumber(form.heartRate),
         weight: parseOptionalNumber(form.weight),
         hba1c: parseOptionalNumber(form.hba1c),
+        caloriesBurned: parseOptionalNumber(form.caloriesBurned),
         notes: form.notes.trim() || undefined,
       });
+      const calories = parseOptionalNumber(form.caloriesBurned);
+      if (typeof calories === "number") {
+        await upsertActivityLog(user.uid, {
+          date: form.date,
+          caloriesBurned: calories,
+          source: "daily-health",
+        });
+      }
       await onSaved?.();
       toast.success("Daily health log saved.");
       setOpen(false);
@@ -87,15 +97,15 @@ export default function LogDailyHealthDialog({ children, onSaved }: LogDailyHeal
           </Button>
         )}
       </DialogTrigger>
-      <DialogContent className="max-w-xl">
-        <DialogHeader>
+      <DialogContent className="max-w-xl max-h-[85vh] p-0 overflow-hidden flex flex-col">
+        <DialogHeader className="sticky top-0 z-10 bg-background border-b px-6 py-4">
           <DialogTitle className="flex items-center gap-2">
             <Droplets className="w-5 h-5 text-primary" />
             Daily Health Entry
           </DialogTitle>
         </DialogHeader>
 
-        <form onSubmit={handleSave} className="space-y-4">
+        <form onSubmit={handleSave} className="flex-1 min-h-0 space-y-4 overflow-y-auto px-6 py-4">
           <div className="space-y-2">
             <Label>Date</Label>
             <Input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} required />
@@ -172,6 +182,16 @@ export default function LogDailyHealthDialog({ children, onSaved }: LogDailyHeal
               value={form.hba1c}
               onChange={(e) => setForm({ ...form, hba1c: e.target.value })}
               placeholder="e.g., 6.8"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label>Daily Calories Burned (optional)</Label>
+            <Input
+              type="number"
+              value={form.caloriesBurned}
+              onChange={(e) => setForm({ ...form, caloriesBurned: e.target.value })}
+              placeholder="e.g., 420"
             />
           </div>
 

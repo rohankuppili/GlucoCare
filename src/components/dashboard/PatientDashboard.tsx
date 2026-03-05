@@ -24,7 +24,9 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import {
   Dialog,
+  DialogDescription,
   DialogContent,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
@@ -35,6 +37,7 @@ import { getGlucoseStatus, type Alert, type HealthInsight } from '@/types';
 import GlucoseChart from '@/components/charts/GlucoseChart';
 import HbA1cChart from '@/components/charts/HbA1cChart';
 import VitalsTrendChart from '@/components/charts/VitalsTrendChart';
+import ActivityCaloriesChart from '@/components/charts/ActivityCaloriesChart';
 import MetricCard from '@/components/dashboard/MetricCard';
 import AlertsPanel from '@/components/dashboard/AlertsPanel';
 import InsightsPanel from '@/components/dashboard/InsightsPanel';
@@ -46,6 +49,7 @@ import {
   dispatchDueMedicationReminderEmails,
   disableMedicationReminderJobsForPatient,
   getMedicationReminderSettings,
+  listActivityLogs,
   listAvailableAppointmentSlotsForDoctor,
   listAppointmentsForPatient,
   listCarePlansForPatient,
@@ -53,6 +57,8 @@ import {
   listNotifications,
   setMedicationReminderEnabled,
   syncMedicationReminderJobsForPatient,
+  upsertActivityLog,
+  type ActivityLogDoc,
   type AppointmentDoc,
   type DoctorCarePlanDoc,
   type DailyHealthMetricsDoc,
@@ -64,6 +70,10 @@ import {
   type DietPreference,
   type WeeklyDietPlan,
 } from '@/lib/diet-plan-generator';
+import {
+  generateWeeklyWorkoutPlan,
+  type WeeklyWorkoutPlan,
+} from '@/lib/workout-plan-generator';
 import DashboardSettingsDialog from '@/components/settings/DashboardSettingsDialog';
 import { getDoctorForPatient } from '@/lib/roles';
 import { toast } from 'sonner';
@@ -79,6 +89,8 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
   const { loading: roleLoading, patientProfile } = useRoleBasedAuth();
   const [dailyMetrics, setDailyMetrics] = useState<DailyHealthMetricsDoc[]>([]);
   const [dailyMetricsLoading, setDailyMetricsLoading] = useState(true);
+  const [activityLogs, setActivityLogs] = useState<ActivityLogDoc[]>([]);
+  const [activityLogsLoading, setActivityLogsLoading] = useState(true);
   const [appointments, setAppointments] = useState<AppointmentDoc[]>([]);
   const [notifications, setNotifications] = useState<NotificationDoc[]>([]);
   const [doctorCarePlans, setDoctorCarePlans] = useState<DoctorCarePlanDoc[]>([]);
@@ -94,6 +106,13 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
   const [dietPreferenceByPlanId, setDietPreferenceByPlanId] = useState<Record<string, DietPreference>>({});
   const [generatedDietByPlanId, setGeneratedDietByPlanId] = useState<Record<string, WeeklyDietPlan>>({});
   const [generatingDietByPlanId, setGeneratingDietByPlanId] = useState<Record<string, boolean>>({});
+  const [generatedWorkoutByPlanId, setGeneratedWorkoutByPlanId] = useState<Record<string, WeeklyWorkoutPlan>>({});
+  const [generatingWorkoutByPlanId, setGeneratingWorkoutByPlanId] = useState<Record<string, boolean>>({});
+  const [showActivityActions, setShowActivityActions] = useState(false);
+  const [showActivityLogsPanel, setShowActivityLogsPanel] = useState(false);
+  const [activityLogOpen, setActivityLogOpen] = useState(false);
+  const [activityCaloriesInput, setActivityCaloriesInput] = useState("");
+  const [savingActivityLog, setSavingActivityLog] = useState(false);
   const alertsSectionRef = useRef<HTMLDivElement | null>(null);
 
   const patientName = patientProfile ? `${patientProfile.firstName} ${patientProfile.lastName}`.trim() : "";
@@ -104,10 +123,16 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
     async function load() {
       if (!user) return;
       setDailyMetricsLoading(true);
-      const readings = await listDailyHealthMetrics(user.uid);
+      setActivityLogsLoading(true);
+      const [readings, activityItems] = await Promise.all([
+        listDailyHealthMetrics(user.uid),
+        listActivityLogs(user.uid),
+      ]);
       if (cancelled) return;
       setDailyMetrics(readings);
+      setActivityLogs(activityItems);
       setDailyMetricsLoading(false);
+      setActivityLogsLoading(false);
     }
 
     load();
@@ -248,6 +273,7 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
   const stats = useMemo(() => calculateGlucoseStats(chartReadings), [chartReadings]);
 
   const latestDaily = dailyMetrics[0];
+  const latestActivity = activityLogs[0];
   const patientAge = useMemo(() => {
     const dob = patientProfile?.dob;
     if (!dob) return undefined;
@@ -276,6 +302,10 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
       ? `${latestDaily.bloodPressureSystolic}/${latestDaily.bloodPressureDiastolic}`
       : '--';
   const latestHeartRate = latestDaily?.heartRate ?? '--';
+  const latestCaloriesBurned =
+    latestActivity?.caloriesBurned ??
+    latestDaily?.caloriesBurned ??
+    '--';
   const unreadNotifications = notifications.filter((n) => !n.isRead).length;
   const hba1cReadings = useMemo(() => {
     const patientId = patientProfile?.patientId ?? user?.uid ?? "";
@@ -288,6 +318,39 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
         timestamp: `${m.date}T09:00:00`,
       }));
   }, [dailyMetrics, patientProfile?.patientId, user?.uid]);
+
+  const workoutWeightLogs = useMemo(
+    () =>
+      dailyMetrics
+        .filter((m) => typeof m.weight === "number" && Number.isFinite(m.weight))
+        .slice()
+        .sort((a, b) => a.date.localeCompare(b.date))
+        .slice(-30)
+        .map((m) => ({
+          date: m.date,
+          value: Number(m.weight),
+        })),
+    [dailyMetrics]
+  );
+
+  const workoutCalorieLogs = useMemo(() => {
+    const byDate = new Map<string, number>();
+    for (const metric of dailyMetrics) {
+      if (typeof metric.caloriesBurned === "number" && Number.isFinite(metric.caloriesBurned)) {
+        byDate.set(metric.date, Math.round(metric.caloriesBurned));
+      }
+    }
+    for (const log of activityLogs) {
+      if (Number.isFinite(log.caloriesBurned)) {
+        byDate.set(log.date, Math.round(log.caloriesBurned));
+      }
+    }
+
+    return Array.from(byDate.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .slice(-30)
+      .map(([date, value]) => ({ date, value }));
+  }, [activityLogs, dailyMetrics]);
 
   const panelAlerts = useMemo<Alert[]>(() => {
     const patientId = patientProfile?.patientId ?? user?.uid ?? "";
@@ -489,6 +552,57 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
     }
   };
 
+  const handleGenerateWeeklyWorkoutPlan = async (planId: string, exerciseGoalText: string) => {
+    setGeneratingWorkoutByPlanId((prev) => ({ ...prev, [planId]: true }));
+    try {
+      const weekly = await generateWeeklyWorkoutPlan({
+        doctorRecommendation: exerciseGoalText,
+        age: patientAge,
+        weightLogs: workoutWeightLogs,
+        calorieLogs: workoutCalorieLogs,
+      });
+      setGeneratedWorkoutByPlanId((prev) => ({ ...prev, [planId]: weekly }));
+      toast.success("AI weekly workout plan generated.");
+    } catch (error) {
+      const message =
+        (error as { message?: string })?.message ?? "Failed to generate AI workout plan.";
+      toast.error(message);
+    } finally {
+      setGeneratingWorkoutByPlanId((prev) => ({ ...prev, [planId]: false }));
+    }
+  };
+
+  const handleSaveActivityLog = async () => {
+    if (!user) return;
+    const calories = Number(activityCaloriesInput);
+    if (!Number.isFinite(calories) || calories <= 0) {
+      toast.error("Please enter a valid calories burned value.");
+      return;
+    }
+    setSavingActivityLog(true);
+    try {
+      const date = new Date().toISOString().split("T")[0];
+      await upsertActivityLog(user.uid, {
+        date,
+        caloriesBurned: calories,
+        source: "quick-action",
+      });
+      const [metrics, logs] = await Promise.all([
+        listDailyHealthMetrics(user.uid),
+        listActivityLogs(user.uid),
+      ]);
+      setDailyMetrics(metrics);
+      setActivityLogs(logs);
+      setActivityLogOpen(false);
+      setActivityCaloriesInput("");
+      toast.success("Activity calories logged.");
+    } catch {
+      toast.error("Failed to log activity.");
+    } finally {
+      setSavingActivityLog(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gradient-hero">
       {/* Header */}
@@ -597,8 +711,12 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
                   <LogDailyHealthDialog
                     onSaved={async () => {
                       if (!user) return;
-                      const readings = await listDailyHealthMetrics(user.uid);
+                      const [readings, activityItems] = await Promise.all([
+                        listDailyHealthMetrics(user.uid),
+                        listActivityLogs(user.uid),
+                      ]);
                       setDailyMetrics(readings);
+                      setActivityLogs(activityItems);
                     }}
                   >
                     <Button variant="hero" size="lg">
@@ -656,6 +774,53 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
           />
         </motion.div>
 
+        {/* Charts and Insights Grid */}
+        <div className="grid lg:grid-cols-3 gap-6 mb-8">
+          {/* Glucose Chart - Takes 2 columns */}
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.4 }}
+            className="lg:col-span-2"
+          >
+            <Card variant="glass">
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <CardTitle className="flex items-center gap-2">
+                    <TrendingUp className="w-6 h-6 text-primary" />
+                    Glucose Trends
+                  </CardTitle>
+                  <div className="flex gap-2">
+                    {['7D', '14D', '30D'].map((period) => (
+                      <Button
+                        key={period}
+                        variant={period === '7D' ? 'default' : 'ghost'}
+                        size="sm"
+                      >
+                        {period}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <GlucoseChart readings={chartReadings.slice(-28)} />
+              </CardContent>
+            </Card>
+          </motion.div>
+
+          {/* Alerts Panel */}
+          <motion.div
+            ref={alertsSectionRef}
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.5 }}
+            className="scroll-mt-28"
+          >
+            <AlertsPanel alerts={panelAlerts} />
+          </motion.div>
+        </div>
+
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -683,15 +848,24 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
           className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8"
         >
           {[
-            { icon: Droplets, label: 'Log Glucose', color: 'bg-primary' },
-            { icon: Utensils, label: 'Log Meal', color: 'bg-success' },
-            { icon: Footprints, label: 'Log Activity', color: 'bg-warning' },
-            { icon: Heart, label: 'Log Vitals', color: 'bg-accent' },
+            { icon: Droplets, label: 'Log Glucose', color: 'bg-primary', onClick: () => toast.info("Use 'Log Daily Health' to save glucose.") },
+            { icon: Utensils, label: 'Log Meal', color: 'bg-success', onClick: () => toast.info("Meal logging will be added in a future update.") },
+            {
+              icon: Footprints,
+              label: 'Log Activity',
+              color: 'bg-warning',
+              onClick: () => {
+                setShowActivityActions(true);
+                setActivityLogOpen(true);
+              },
+            },
+            { icon: Heart, label: 'Log Vitals', color: 'bg-accent', onClick: () => toast.info("Use 'Log Daily Health' to save vitals.") },
           ].map((action) => (
             <Card
               key={action.label}
               variant="glass"
               className="cursor-pointer hover:shadow-glow transition-all duration-300 group"
+              onClick={action.onClick}
             >
               <CardContent className="p-6 flex flex-col items-center text-center">
                 <div className={`w-14 h-14 rounded-2xl ${action.color} flex items-center justify-center mb-3 group-hover:scale-110 transition-transform`}>
@@ -702,6 +876,59 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
             </Card>
           ))}
         </motion.div>
+
+        {showActivityActions && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.32 }}
+            className="mb-8"
+          >
+            <Card variant="glass">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Footprints className="w-5 h-5 text-warning" />
+                  Activity Tracker
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="flex flex-wrap gap-3">
+                  <Button variant="hero" onClick={() => setActivityLogOpen(true)}>
+                    Log Activity
+                  </Button>
+                  <Button variant="outline" onClick={() => setShowActivityLogsPanel((prev) => !prev)}>
+                    {showActivityLogsPanel ? "Hide Graph/Logs" : "View Graph/Logs"}
+                  </Button>
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  Latest calories burned: {latestCaloriesBurned === '--' ? '--' : `${latestCaloriesBurned} kcal`}
+                </p>
+                {showActivityLogsPanel && (
+                  <div className="space-y-4 pt-2">
+                    <ActivityCaloriesChart data={activityLogs.slice(0, 30)} />
+                    <div className="space-y-2">
+                      <p className="text-sm font-medium">Recent activity logs</p>
+                      {activityLogsLoading && (
+                        <p className="text-sm text-muted-foreground">Loading activity logs...</p>
+                      )}
+                      {!activityLogsLoading && activityLogs.length === 0 && (
+                        <p className="text-sm text-muted-foreground">No activity logs yet.</p>
+                      )}
+                      {activityLogs.slice(0, 7).map((log) => (
+                        <div key={log.id} className="rounded-md border border-border/60 p-3 text-sm">
+                          <p className="font-medium">{log.caloriesBurned} kcal burned</p>
+                          <p className="text-xs text-muted-foreground">
+                            {log.date} ({log.source === "quick-action" ? "Log Activity" : "Log Daily Health"})
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </motion.div>
+        )}
 
         <motion.div
           initial={{ opacity: 0, y: 20 }}
@@ -903,7 +1130,77 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
                   )}
 
                   {plan.type === "exercise-goal" && plan.exerciseGoal && (
-                    <p className="text-sm whitespace-pre-wrap">{plan.exerciseGoal.text}</p>
+                    <div className="space-y-3">
+                      <p className="text-sm whitespace-pre-wrap">{plan.exerciseGoal.text}</p>
+                      <Button
+                        variant="outline"
+                        onClick={() => void handleGenerateWeeklyWorkoutPlan(plan.id, plan.exerciseGoal?.text ?? "")}
+                        disabled={generatingWorkoutByPlanId[plan.id]}
+                      >
+                        {generatingWorkoutByPlanId[plan.id] ? "Generating..." : "Generate 1-Week Workout Plan"}
+                      </Button>
+                      <p className="text-xs text-muted-foreground">
+                        Uses doctor goal, age, recent weight logs, and recent calorie-burn logs.
+                      </p>
+                      {generatedWorkoutByPlanId[plan.id] && (
+                        <div className="rounded-md border border-border/60 bg-muted/30 p-3 space-y-3">
+                          <p className="text-sm font-medium">Generated weekly workout plan</p>
+                          <p className="text-xs text-muted-foreground">
+                            {generatedWorkoutByPlanId[plan.id].weeklySummary}
+                          </p>
+                          <div className="space-y-1">
+                            <p className="text-xs font-medium">Alignment with doctor advice and logs</p>
+                            {generatedWorkoutByPlanId[plan.id].alignmentNotes.map((note, idx) => (
+                              <p key={`${plan.id}-workout-align-${idx}`} className="text-xs text-muted-foreground">
+                                {note}
+                              </p>
+                            ))}
+                          </div>
+                          <div className="grid md:grid-cols-2 gap-3">
+                            <div className="rounded-md border border-border/60 bg-background p-3">
+                              <p className="text-xs font-medium">Weight trend</p>
+                              <p className="text-xs mt-1 text-muted-foreground">
+                                Recent: {generatedWorkoutByPlanId[plan.id].weightTrend.recent}
+                              </p>
+                              <p className="text-xs mt-1 text-muted-foreground">
+                                Projected: {generatedWorkoutByPlanId[plan.id].weightTrend.projected}
+                              </p>
+                            </div>
+                            <div className="rounded-md border border-border/60 bg-background p-3">
+                              <p className="text-xs font-medium">Calories-burn trend</p>
+                              <p className="text-xs mt-1 text-muted-foreground">
+                                Recent: {generatedWorkoutByPlanId[plan.id].calorieTrend.recent}
+                              </p>
+                              <p className="text-xs mt-1 text-muted-foreground">
+                                Projected: {generatedWorkoutByPlanId[plan.id].calorieTrend.projected}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="space-y-2">
+                            {generatedWorkoutByPlanId[plan.id].days.map((day) => (
+                              <div key={`${plan.id}-workout-${day.day}`} className="rounded-md border border-border/60 bg-background p-3">
+                                <p className="font-medium text-sm">
+                                  {day.day} ({day.intensity})
+                                </p>
+                                <p className="text-xs mt-1"><span className="font-medium">Focus:</span> {day.focus}</p>
+                                <p className="text-xs mt-1"><span className="font-medium">Warm-up:</span> {day.warmup}</p>
+                                <p className="text-xs mt-1"><span className="font-medium">Workout:</span> {day.workout}</p>
+                                <p className="text-xs mt-1"><span className="font-medium">Cooldown:</span> {day.cooldown}</p>
+                                <p className="text-xs mt-1 text-muted-foreground">
+                                  Duration: {day.durationMinutes} min | Estimated burn: {day.estimatedCaloriesBurn} kcal
+                                </p>
+                                <p className="text-xs mt-1 text-muted-foreground">
+                                  Why this matches your profile: {day.rationale}
+                                </p>
+                                <p className="text-xs mt-1 text-muted-foreground">
+                                  Safety: {day.safetyNote}
+                                </p>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   )}
 
                   {plan.type === "medical-note" && plan.medicalNote && (
@@ -918,53 +1215,6 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
             </CardContent>
           </Card>
         </motion.div>
-
-        {/* Charts and Insights Grid */}
-        <div className="grid lg:grid-cols-3 gap-6">
-          {/* Glucose Chart - Takes 2 columns */}
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.4 }}
-            className="lg:col-span-2"
-          >
-            <Card variant="glass">
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle className="flex items-center gap-2">
-                    <TrendingUp className="w-6 h-6 text-primary" />
-                    Glucose Trends
-                  </CardTitle>
-                  <div className="flex gap-2">
-                    {['7D', '14D', '30D'].map((period) => (
-                      <Button
-                        key={period}
-                        variant={period === '7D' ? 'default' : 'ghost'}
-                        size="sm"
-                      >
-                        {period}
-                      </Button>
-                    ))}
-                  </div>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <GlucoseChart readings={chartReadings.slice(-28)} />
-              </CardContent>
-            </Card>
-          </motion.div>
-
-          {/* Alerts Panel */}
-          <motion.div
-            ref={alertsSectionRef}
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.5 }}
-            className="scroll-mt-28"
-          >
-            <AlertsPanel alerts={panelAlerts} />
-          </motion.div>
-        </div>
 
         {/* Health Insights */}
         <motion.div
@@ -990,6 +1240,38 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
             {openTrend === "bpm" && <VitalsTrendChart metric="heart-rate" data={dailyMetrics} />}
             {openTrend === "weight" && <VitalsTrendChart metric="weight" data={dailyMetrics} />}
             {openTrend === "hba1c" && <HbA1cChart readings={hba1cReadings} />}
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={activityLogOpen} onOpenChange={setActivityLogOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <Footprints className="w-5 h-5 text-warning" />
+                Log Activity
+              </DialogTitle>
+              <DialogDescription>
+                Enter only today&apos;s calories burned.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Daily Calories Burned</label>
+              <Input
+                type="number"
+                min={1}
+                value={activityCaloriesInput}
+                onChange={(e) => setActivityCaloriesInput(e.target.value)}
+                placeholder="e.g., 450"
+              />
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setActivityLogOpen(false)}>
+                Cancel
+              </Button>
+              <Button variant="hero" onClick={() => void handleSaveActivityLog()} disabled={savingActivityLog}>
+                {savingActivityLog ? "Saving..." : "Save Activity"}
+              </Button>
+            </DialogFooter>
           </DialogContent>
         </Dialog>
       </main>
