@@ -16,7 +16,6 @@ import {
   Download,
   Clock,
   User,
-  Trash2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -38,7 +37,7 @@ import HbA1cChart from '@/components/charts/HbA1cChart';
 import VitalsTrendChart from '@/components/charts/VitalsTrendChart';
 import MetricCard from '@/components/dashboard/MetricCard';
 import { useRoleBasedAuth } from '@/hooks/useRoleBasedAuth';
-import DeleteAccountButton from '@/components/auth/DeleteAccountButton';
+import DashboardSettingsDialog from '@/components/settings/DashboardSettingsDialog';
 import {
   buildDayTimeSlots,
   addDoctorPrivateNote,
@@ -561,12 +560,7 @@ const DoctorDashboard = ({ onLogout }: DoctorDashboardProps) => {
               >
                 <Bell className="w-6 h-6" />
               </Button>
-              <DeleteAccountButton
-                variant="ghost"
-                size="icon-lg"
-                iconOnly
-                className="text-destructive hover:text-destructive"
-              />
+              <DashboardSettingsDialog />
               <Button variant="ghost" size="icon-lg" onClick={onLogout}>
                 <LogOut className="w-6 h-6" />
               </Button>

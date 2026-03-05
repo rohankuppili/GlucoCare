@@ -4,7 +4,6 @@ import { Button } from "@/components/ui/button";
 import { useAuthUser } from "@/hooks/useAuthUser";
 import { useRoleBasedAuth } from "@/hooks/useRoleBasedAuth";
 import SignOutButton from "@/components/auth/SignOutButton";
-import DeleteAccountButton from "@/components/auth/DeleteAccountButton";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -102,11 +101,6 @@ export default function AuthNavigation() {
         <DropdownMenuItem asChild>
           <div className="w-full">
             <SignOutButton variant="ghost" />
-          </div>
-        </DropdownMenuItem>
-        <DropdownMenuItem asChild>
-          <div className="w-full">
-            <DeleteAccountButton variant="destructive" />
           </div>
         </DropdownMenuItem>
       </DropdownMenuContent>

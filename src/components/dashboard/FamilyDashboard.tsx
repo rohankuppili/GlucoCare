@@ -12,7 +12,6 @@ import {
   Phone,
   ChevronRight,
   LogOut,
-  Settings,
   Bell,
   Search,
   Eye,
@@ -28,7 +27,7 @@ import { getGlucoseStatus } from '@/types';
 import GlucoseChart from '@/components/charts/GlucoseChart';
 import MetricCard from '@/components/dashboard/MetricCard';
 import { useRoleBasedAuth } from '@/hooks/useRoleBasedAuth';
-import DeleteAccountButton from '@/components/auth/DeleteAccountButton';
+import DashboardSettingsDialog from '@/components/settings/DashboardSettingsDialog';
 import {
   listAppointmentsForPatient,
   listDailyHealthMetrics,
@@ -162,12 +161,7 @@ const FamilyDashboard = ({ onLogout }: FamilyDashboardProps) => {
                   </span>
                 )}
               </Button>
-              <DeleteAccountButton
-                variant="ghost"
-                size="icon-lg"
-                iconOnly
-                className="text-destructive hover:text-destructive"
-              />
+              <DashboardSettingsDialog />
               <Button variant="ghost" size="icon-lg" onClick={onLogout}>
                 <LogOut className="w-6 h-6" />
               </Button>

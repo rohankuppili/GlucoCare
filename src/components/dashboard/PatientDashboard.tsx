@@ -17,7 +17,6 @@ import {
   ChevronRight,
   Phone,
   LogOut,
-  Settings,
   User
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -44,18 +43,23 @@ import { useRoleBasedAuth } from '@/hooks/useRoleBasedAuth';
 import {
   buildDayTimeSlots,
   createAppointmentRequest,
+  dispatchDueMedicationReminderEmails,
+  disableMedicationReminderJobsForPatient,
+  getMedicationReminderSettings,
   listAvailableAppointmentSlotsForDoctor,
   listAppointmentsForPatient,
   listCarePlansForPatient,
   listDailyHealthMetrics,
   listNotifications,
+  setMedicationReminderEnabled,
+  syncMedicationReminderJobsForPatient,
   type AppointmentDoc,
   type DoctorCarePlanDoc,
   type DailyHealthMetricsDoc,
   type NotificationDoc,
   type TimeSlotOption,
 } from '@/lib/firestore';
-import DeleteAccountButton from '@/components/auth/DeleteAccountButton';
+import DashboardSettingsDialog from '@/components/settings/DashboardSettingsDialog';
 import { getDoctorForPatient } from '@/lib/roles';
 import { toast } from 'sonner';
 import LogDailyHealthDialog from '@/components/health/LogDailyHealthDialog';
@@ -80,6 +84,8 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
   const [slotsLoading, setSlotsLoading] = useState(false);
   const [submittingAppointment, setSubmittingAppointment] = useState(false);
   const [openTrend, setOpenTrend] = useState<"bp" | "bpm" | "weight" | "hba1c" | null>(null);
+  const [medicationReminderEnabled, setMedicationReminderEnabledState] = useState(true);
+  const [medicationReminderSaving, setMedicationReminderSaving] = useState(false);
   const alertsSectionRef = useRef<HTMLDivElement | null>(null);
 
   const patientName = patientProfile ? `${patientProfile.firstName} ${patientProfile.lastName}`.trim() : "";
@@ -157,6 +163,51 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
       cancelled = true;
     };
   }, [patientProfile?.patientId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadReminderSettings() {
+      if (!user) return;
+      try {
+        const settings = await getMedicationReminderSettings(user.uid);
+        if (!cancelled) {
+          setMedicationReminderEnabledState(settings.enabled);
+        }
+      } catch {
+        if (!cancelled) toast.error("Failed to load reminder settings.");
+      }
+    }
+    loadReminderSettings();
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
+
+  useEffect(() => {
+    if (!user || !medicationReminderEnabled) return;
+    let isUnmounted = false;
+    let timer: ReturnType<typeof setInterval> | null = null;
+
+    async function setupReminderProcessing() {
+      try {
+        await syncMedicationReminderJobsForPatient(user.uid);
+        if (isUnmounted) return;
+        await dispatchDueMedicationReminderEmails(user.uid);
+        if (isUnmounted) return;
+        timer = setInterval(() => {
+          void dispatchDueMedicationReminderEmails(user.uid);
+        }, 60 * 1000);
+      } catch {
+        if (!isUnmounted) toast.error("Failed to start medication email reminders.");
+      }
+    }
+
+    setupReminderProcessing();
+    return () => {
+      isUnmounted = true;
+      if (timer) clearInterval(timer);
+    };
+  }, [medicationReminderEnabled, user]);
 
   const chartReadings = useMemo(() => {
     const patientId = patientProfile?.patientId ?? user?.uid ?? "";
@@ -367,6 +418,30 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
     alertsSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
+  const handleMedicationReminderToggle = async (enabled: boolean) => {
+    if (!user) return;
+    setMedicationReminderSaving(true);
+    try {
+      await setMedicationReminderEnabled(user.uid, enabled);
+      if (enabled) {
+        await syncMedicationReminderJobsForPatient(user.uid);
+        await dispatchDueMedicationReminderEmails(user.uid);
+      } else {
+        await disableMedicationReminderJobsForPatient(user.uid);
+      }
+      setMedicationReminderEnabledState(enabled);
+      toast.success(
+        enabled
+          ? "Medication email reminders enabled."
+          : "Medication email reminders disabled."
+      );
+    } catch {
+      toast.error("Failed to update reminder settings.");
+    } finally {
+      setMedicationReminderSaving(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gradient-hero">
       {/* Header */}
@@ -398,15 +473,12 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
                   </span>
                 )}
               </Button>
-              <DeleteAccountButton
-                variant="ghost"
-                size="icon-lg"
-                iconOnly
-                className="text-destructive hover:text-destructive"
+              <DashboardSettingsDialog
+                showMedicationReminderToggle
+                medicationReminderEnabled={medicationReminderEnabled}
+                medicationReminderSaving={medicationReminderSaving}
+                onMedicationReminderChange={handleMedicationReminderToggle}
               />
-              <Button variant="glass" size="icon-lg">
-                <Settings className="w-6 h-6" />
-              </Button>
               <Button variant="ghost" size="icon-lg" onClick={onLogout}>
                 <LogOut className="w-6 h-6" />
               </Button>

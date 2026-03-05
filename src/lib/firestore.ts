@@ -5,10 +5,13 @@ import {
   doc,
   getDoc,
   getDocs,
+  limit,
   orderBy,
   query,
+  setDoc,
   Timestamp,
   updateDoc,
+  writeBatch,
   where,
   serverTimestamp,
 } from "firebase/firestore";
@@ -485,6 +488,90 @@ export type PrescriptionMedicineInput = {
   night: MealTimingOption;
 };
 
+export type MedicationReminderSlot =
+  | "morning-before-food"
+  | "morning-after-food"
+  | "afternoon-before-food"
+  | "afternoon-after-food"
+  | "night-before-food"
+  | "night-after-food";
+
+type MedicationReminderTiming = {
+  slot: MedicationReminderSlot;
+  label: string;
+  emailLabel: string;
+  hour: number;
+  minute: number;
+};
+
+export const MEDICATION_REMINDER_SLOTS: MedicationReminderTiming[] = [
+  {
+    slot: "morning-before-food",
+    label: "Morning before food",
+    emailLabel: "Morning before food (07:30 AM)",
+    hour: 7,
+    minute: 30,
+  },
+  {
+    slot: "morning-after-food",
+    label: "Morning after food",
+    emailLabel: "Morning after food (09:00 AM)",
+    hour: 9,
+    minute: 0,
+  },
+  {
+    slot: "afternoon-before-food",
+    label: "Afternoon before food",
+    emailLabel: "Afternoon before food (12:00 PM)",
+    hour: 12,
+    minute: 0,
+  },
+  {
+    slot: "afternoon-after-food",
+    label: "Afternoon after food",
+    emailLabel: "Afternoon after food (02:00 PM)",
+    hour: 14,
+    minute: 0,
+  },
+  {
+    slot: "night-before-food",
+    label: "Night before food",
+    emailLabel: "Night before food (07:30 PM)",
+    hour: 19,
+    minute: 30,
+  },
+  {
+    slot: "night-after-food",
+    label: "Night after food",
+    emailLabel: "Night after food (09:30 PM)",
+    hour: 21,
+    minute: 30,
+  },
+];
+
+type MedicationReminderEmailJobStatus = "pending" | "sent" | "disabled";
+
+type MedicationReminderEmailJobDoc = {
+  id: string;
+  patientUid: string;
+  patientName: string;
+  patientEmail: string;
+  scheduleDate: string; // YYYY-MM-DD
+  slot: MedicationReminderSlot;
+  slotLabel: string;
+  sendAt: Date;
+  status: MedicationReminderEmailJobStatus;
+  medications: Array<{ name: string; dosage: string }>;
+  createdAt?: Date;
+  updatedAt?: Date;
+  sentAt?: Date;
+};
+
+export type MedicationReminderSettingsDoc = {
+  enabled: boolean;
+  updatedAt?: Date;
+};
+
 export type PrescriptionDoc = {
   medicines: PrescriptionMedicineInput[];
   comments?: string;
@@ -572,6 +659,11 @@ type CreateDoctorPrivateNoteInput = {
 
 const carePlansRef = collection(db, "doctorCarePlans");
 const doctorPrivateNotesRef = (doctorUid: string) => collection(db, "users", doctorUid, "privateNotes");
+const medicationReminderSettingsRef = (uid: string) =>
+  doc(db, "users", uid, "settings", "medicationReminders");
+const medicationReminderJobsRef = collection(db, "medicationReminderEmails");
+// `mail` is used by the Firebase Trigger Email extension (or equivalent backend worker).
+const mailQueueRef = collection(db, "mail");
 
 const MAX_DIET_PLAN_IMAGE_BYTES = 5 * 1024 * 1024;
 
@@ -641,6 +733,308 @@ function sortPrivateNotesByCreatedDesc(a: DoctorPrivateNoteDoc, b: DoctorPrivate
   return (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0);
 }
 
+function parseFirestoreMaybeDate(value: unknown): Date | undefined {
+  if (!value) return undefined;
+  if (value instanceof Date) return value;
+  if (value instanceof Timestamp) return value.toDate();
+  if (typeof value === "object" && value && "toDate" in value) {
+    return (value as { toDate: () => Date }).toDate();
+  }
+  return undefined;
+}
+
+function slotByPeriodTiming(
+  period: "morning" | "afternoon" | "night",
+  timing: Exclude<MealTimingOption, "none">
+): MedicationReminderSlot {
+  return `${period}-${timing}` as MedicationReminderSlot;
+}
+
+function reminderJobId(uid: string, date: string, slot: MedicationReminderSlot): string {
+  return `${uid}_${date}_${slot}`.replace(/[^a-zA-Z0-9_-]/g, "_");
+}
+
+function formatDateYmd(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function toReminderJobDoc(d: { id: string; data: () => Record<string, unknown> }): MedicationReminderEmailJobDoc {
+  const raw = d.data();
+  return {
+    id: d.id,
+    patientUid: String(raw.patientUid ?? ""),
+    patientName: String(raw.patientName ?? ""),
+    patientEmail: String(raw.patientEmail ?? ""),
+    scheduleDate: String(raw.scheduleDate ?? ""),
+    slot: (raw.slot as MedicationReminderSlot) ?? "morning-before-food",
+    slotLabel: String(raw.slotLabel ?? ""),
+    sendAt: parseFirestoreMaybeDate(raw.sendAt) ?? new Date(),
+    status: (raw.status as MedicationReminderEmailJobStatus) ?? "pending",
+    medications: Array.isArray(raw.medications)
+      ? raw.medications.map((m) => ({
+          name: String((m as { name?: unknown }).name ?? ""),
+          dosage: String((m as { dosage?: unknown }).dosage ?? ""),
+        }))
+      : [],
+    createdAt: parseFirestoreMaybeDate(raw.createdAt),
+    updatedAt: parseFirestoreMaybeDate(raw.updatedAt),
+    sentAt: parseFirestoreMaybeDate(raw.sentAt),
+  };
+}
+
+function buildMedicationEmailContent(job: MedicationReminderEmailJobDoc): {
+  subject: string;
+  text: string;
+  html: string;
+} {
+  const medLines = job.medications
+    .map((m, idx) => `${idx + 1}. ${m.name} - ${m.dosage}`)
+    .join("\n");
+  const medHtml = job.medications
+    .map((m) => `<li><strong>${m.name}</strong> (${m.dosage})</li>`)
+    .join("");
+  return {
+    subject: `Medication Reminder: ${job.slotLabel}`,
+    text: [
+      `Hello ${job.patientName || "Patient"},`,
+      "",
+      `This is your medication reminder for ${job.slotLabel}.`,
+      "",
+      "Medications:",
+      medLines || "No medication details available.",
+      "",
+      "Please take your medicines as prescribed by your doctor.",
+      "",
+      "Regards,",
+      "GlucoCare",
+    ].join("\n"),
+    html: [
+      `<p>Hello ${job.patientName || "Patient"},</p>`,
+      `<p>This is your medication reminder for <strong>${job.slotLabel}</strong>.</p>`,
+      `<p><strong>Medications:</strong></p>`,
+      `<ul>${medHtml || "<li>No medication details available.</li>"}</ul>`,
+      `<p>Please take your medicines as prescribed by your doctor.</p>`,
+      `<p>Regards,<br/>GlucoCare</p>`,
+    ].join(""),
+  };
+}
+
+async function fetchPatientReminderMedicines(
+  patientUid: string
+): Promise<{ patientName: string; patientEmail: string; medicines: PrescriptionMedicineInput[] }> {
+  const userSnap = await getDoc(doc(db, "users", patientUid));
+  const userData = (userSnap.exists() ? userSnap.data() : {}) as Record<string, unknown>;
+  const patientName = `${String(userData.firstName ?? "")} ${String(userData.lastName ?? "")}`.trim();
+  const patientEmail = String(userData.email ?? "").trim();
+  if (!patientEmail) {
+    throw new Error("Patient email address is missing.");
+  }
+
+  const planSnap = await getDocs(
+    query(carePlansRef, where("patientUid", "==", patientUid), where("type", "==", "prescription"))
+  );
+
+  const byMedicine = new Map<string, PrescriptionMedicineInput>();
+  for (const snap of planSnap.docs) {
+    const raw = snap.data() as Record<string, unknown>;
+    if (!Array.isArray(raw.medicines)) continue;
+    for (const med of raw.medicines as PrescriptionMedicineInput[]) {
+      const name = (med.name ?? "").trim();
+      const dosage = (med.dosage ?? "").trim();
+      if (!name || !dosage) continue;
+      byMedicine.set(`${name}__${dosage}`, {
+        name,
+        dosage,
+        morning: med.morning ?? "none",
+        afternoon: med.afternoon ?? "none",
+        night: med.night ?? "none",
+      });
+    }
+  }
+  return { patientName: patientName || "Patient", patientEmail, medicines: Array.from(byMedicine.values()) };
+}
+
+export async function getMedicationReminderSettings(uid: string): Promise<MedicationReminderSettingsDoc> {
+  const snap = await getDoc(medicationReminderSettingsRef(uid));
+  if (!snap.exists()) {
+    return { enabled: true };
+  }
+  const raw = snap.data() as Record<string, unknown>;
+  return {
+    enabled: raw.enabled !== false,
+    updatedAt: parseFirestoreMaybeDate(raw.updatedAt),
+  };
+}
+
+export async function setMedicationReminderEnabled(uid: string, enabled: boolean): Promise<void> {
+  await setDoc(
+    medicationReminderSettingsRef(uid),
+    {
+      enabled,
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true }
+  );
+}
+
+export async function syncMedicationReminderJobsForPatient(
+  patientUid: string,
+  daysAhead = 30
+): Promise<number> {
+  const settings = await getMedicationReminderSettings(patientUid);
+  if (!settings.enabled) return 0;
+
+  const { patientEmail, patientName, medicines } = await fetchPatientReminderMedicines(patientUid);
+  if (medicines.length === 0) return 0;
+
+  const medicationsBySlot = new Map<MedicationReminderSlot, Array<{ name: string; dosage: string }>>();
+  for (const med of medicines) {
+    if (med.morning !== "none") {
+      const slot = slotByPeriodTiming("morning", med.morning);
+      medicationsBySlot.set(slot, [...(medicationsBySlot.get(slot) ?? []), { name: med.name, dosage: med.dosage }]);
+    }
+    if (med.afternoon !== "none") {
+      const slot = slotByPeriodTiming("afternoon", med.afternoon);
+      medicationsBySlot.set(slot, [...(medicationsBySlot.get(slot) ?? []), { name: med.name, dosage: med.dosage }]);
+    }
+    if (med.night !== "none") {
+      const slot = slotByPeriodTiming("night", med.night);
+      medicationsBySlot.set(slot, [...(medicationsBySlot.get(slot) ?? []), { name: med.name, dosage: med.dosage }]);
+    }
+  }
+
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const expectedIds = new Set<string>();
+  const batch = writeBatch(db);
+  let count = 0;
+
+  for (let offset = 0; offset < daysAhead; offset += 1) {
+    const runDate = new Date(start);
+    runDate.setDate(start.getDate() + offset);
+    const ymd = formatDateYmd(runDate);
+
+    for (const slotTiming of MEDICATION_REMINDER_SLOTS) {
+      const slotMeds = medicationsBySlot.get(slotTiming.slot);
+      if (!slotMeds || slotMeds.length === 0) continue;
+
+      const sendAt = new Date(
+        runDate.getFullYear(),
+        runDate.getMonth(),
+        runDate.getDate(),
+        slotTiming.hour,
+        slotTiming.minute,
+        0,
+        0
+      );
+      if (sendAt.getTime() <= now.getTime()) {
+        continue;
+      }
+
+      const id = reminderJobId(patientUid, ymd, slotTiming.slot);
+      expectedIds.add(id);
+      batch.set(doc(medicationReminderJobsRef, id), {
+        patientUid,
+        patientName,
+        patientEmail,
+        scheduleDate: ymd,
+        slot: slotTiming.slot,
+        slotLabel: slotTiming.emailLabel,
+        sendAt,
+        status: "pending" as MedicationReminderEmailJobStatus,
+        medications: slotMeds,
+        updatedAt: serverTimestamp(),
+        createdAt: serverTimestamp(),
+      });
+      count += 1;
+    }
+  }
+
+  const existingSnap = await getDocs(
+    query(medicationReminderJobsRef, where("patientUid", "==", patientUid), where("status", "==", "pending"))
+  );
+  for (const existing of existingSnap.docs) {
+    if (!expectedIds.has(existing.id)) {
+      batch.update(existing.ref, {
+        status: "disabled" as MedicationReminderEmailJobStatus,
+        updatedAt: serverTimestamp(),
+      });
+    }
+  }
+
+  await batch.commit();
+  return count;
+}
+
+export async function disableMedicationReminderJobsForPatient(patientUid: string): Promise<void> {
+  const pendingSnap = await getDocs(
+    query(medicationReminderJobsRef, where("patientUid", "==", patientUid), where("status", "==", "pending"))
+  );
+  if (pendingSnap.empty) return;
+  const batch = writeBatch(db);
+  for (const item of pendingSnap.docs) {
+    batch.update(item.ref, {
+      status: "disabled" as MedicationReminderEmailJobStatus,
+      updatedAt: serverTimestamp(),
+    });
+  }
+  await batch.commit();
+}
+
+export async function dispatchDueMedicationReminderEmails(
+  patientUid: string,
+  maxJobs = 6
+): Promise<number> {
+  const settings = await getMedicationReminderSettings(patientUid);
+  if (!settings.enabled) return 0;
+
+  const snap = await getDocs(
+    query(
+      medicationReminderJobsRef,
+      where("patientUid", "==", patientUid),
+      where("status", "==", "pending"),
+      orderBy("sendAt", "asc"),
+      limit(maxJobs)
+    )
+  );
+  if (snap.empty) return 0;
+
+  const now = Date.now();
+  const dueJobs = snap.docs
+    .map((d) => toReminderJobDoc(d))
+    .filter((job) => job.sendAt.getTime() <= now && !!job.patientEmail);
+
+  if (dueJobs.length === 0) return 0;
+
+  const batch = writeBatch(db);
+  for (const job of dueJobs) {
+    const content = buildMedicationEmailContent(job);
+    const mailDocRef = doc(mailQueueRef);
+    batch.set(mailDocRef, {
+      to: [job.patientEmail],
+      message: {
+        subject: content.subject,
+        text: content.text,
+        html: content.html,
+      },
+      patientUid: job.patientUid,
+      reminderJobId: job.id,
+      kind: "medication-reminder",
+      createdAt: serverTimestamp(),
+    });
+    batch.update(doc(medicationReminderJobsRef, job.id), {
+      status: "sent" as MedicationReminderEmailJobStatus,
+      sentAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  }
+  await batch.commit();
+  return dueJobs.length;
+}
+
 export async function uploadDietPlanImage(
   file: File,
   doctorUid: string,
@@ -705,6 +1099,12 @@ export async function createPrescriptionPlan(input: CreatePrescriptionInput): Pr
       ...payload,
       createdAt: serverTimestamp(),
     });
+  }
+  const settings = await getMedicationReminderSettings(input.patientUid);
+  if (settings.enabled) {
+    await syncMedicationReminderJobsForPatient(input.patientUid);
+  } else {
+    await disableMedicationReminderJobsForPatient(input.patientUid);
   }
   await createCarePlanNotification(input.patientUid, input.doctorName, "prescription");
 }
