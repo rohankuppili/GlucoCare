@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+﻿import { useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import { 
   Stethoscope, 
@@ -120,7 +120,7 @@ const DoctorDashboard = ({ onLogout }: DoctorDashboardProps) => {
       uid: p.uid,
       id: p.patientId,
       name: `${p.firstName} ${p.lastName}`.trim() || p.patientId,
-      lastVisit: '—',
+      lastVisit: 'â€”',
       status: 'stable',
       age: 0,
       diabetesType: 'type2' as const,
@@ -148,10 +148,15 @@ const DoctorDashboard = ({ onLogout }: DoctorDashboardProps) => {
     }
   };
 
-  const filteredPatients = patientsForUI.filter(p => 
-    p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    p.id.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredPatients = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return patientsForUI;
+    return patientsForUI.filter((p) => {
+      const name = p.name.toLowerCase();
+      const id = p.id.toLowerCase();
+      return name.includes(q) || id.includes(q);
+    });
+  }, [patientsForUI, searchQuery]);
 
   useEffect(() => {
     let cancelled = false;
@@ -543,15 +548,6 @@ const DoctorDashboard = ({ onLogout }: DoctorDashboardProps) => {
             </div>
 
             <div className="flex items-center gap-3">
-              <div className="relative hidden md:block">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
-                <Input
-                  placeholder="Search patients..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="pl-10 w-64 rounded-xl"
-                />
-              </div>
               <Button
                 variant="glass"
                 size="icon-lg"
@@ -588,8 +584,22 @@ const DoctorDashboard = ({ onLogout }: DoctorDashboardProps) => {
                     <Plus className="w-5 h-5" />
                   </Button>
                 </div>
+                <div className="relative mt-3">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                  <Input
+                    placeholder="Search by name or patient ID"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="pl-9 rounded-xl"
+                  />
+                </div>
               </CardHeader>
               <CardContent className="space-y-2">
+                {filteredPatients.length === 0 && (
+                  <p className="text-sm text-muted-foreground">
+                    No patients found for "{searchQuery.trim()}".
+                  </p>
+                )}
                 {filteredPatients.map((patient) => (
                   <div
                     key={patient.id}
@@ -622,6 +632,95 @@ const DoctorDashboard = ({ onLogout }: DoctorDashboardProps) => {
                 ))}
               </CardContent>
             </Card>
+
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.05 }}
+              className="mt-6"
+            >
+              <Card variant="glass">
+                <CardHeader>
+                  <div className="flex flex-col gap-3">
+                    <CardTitle className="flex items-center gap-2">
+                      <Calendar className="w-5 h-5 text-primary" />
+                      Appointments For The Day
+                    </CardTitle>
+                    <Input
+                      type="date"
+                      value={selectedDate}
+                      onChange={(e) => setSelectedDate(e.target.value)}
+                    />
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {appointmentsLoading && (
+                    <p className="text-sm text-muted-foreground">Loading appointments...</p>
+                  )}
+                  {!appointmentsLoading && dailyAppointments.length === 0 && (
+                    <p className="text-sm text-muted-foreground">No appointments for this date.</p>
+                  )}
+                  {!appointmentsLoading && dailyAppointments.map((appt) => (
+                    <div key={appt.id} className="rounded-lg border border-border/60 p-3">
+                      <p className="font-medium">{appt.patientName || appt.patientId}</p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {appt.patientId} - {appt.slotLabel}
+                      </p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        <span className="capitalize">{appt.status}</span>
+                      </p>
+                      <div className="flex gap-2 mt-3">
+                        <Button
+                          size="sm"
+                          variant={appt.status === 'approved' ? 'success' : 'outline'}
+                          disabled={statusUpdatingId === appt.id}
+                          onClick={() => handleStatusChange(appt.id, 'approved')}
+                        >
+                          Approve
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant={appt.status === 'rejected' ? 'destructive' : 'outline'}
+                          disabled={statusUpdatingId === appt.id}
+                          onClick={() => handleStatusChange(appt.id, 'rejected')}
+                        >
+                          Reject
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+            </motion.div>
+
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.08 }}
+              className="mt-6"
+            >
+              <Card variant="glass">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Clock className="w-5 h-5 text-primary" />
+                    Upcoming Approved Visits
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {upcomingApproved.length === 0 && (
+                    <p className="text-sm text-muted-foreground">No upcoming approved visits.</p>
+                  )}
+                  {upcomingApproved.map((appt) => (
+                    <div key={`upcoming-${appt.id}`} className="rounded-lg border border-border/60 p-3">
+                      <p className="font-medium">{appt.patientName || appt.patientId}</p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {appt.date} - {appt.slotLabel}
+                      </p>
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+            </motion.div>
           </motion.div>
 
           {/* Main Content */}
@@ -643,7 +742,7 @@ const DoctorDashboard = ({ onLogout }: DoctorDashboardProps) => {
                         <p className="text-muted-foreground">
                           {selectedPatient ? "" : "Link patients to see them here."}
                         </p>
-                        <p className="text-sm text-muted-foreground">ID: {selectedPatient?.id ?? "—"}</p>
+                        <p className="text-sm text-muted-foreground">ID: {selectedPatient?.id ?? "â€”"}</p>
                       </div>
                     </div>
 
@@ -936,97 +1035,6 @@ const DoctorDashboard = ({ onLogout }: DoctorDashboardProps) => {
               </DialogContent>
             </Dialog>
 
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.05 }}
-            >
-              <Card variant="glass">
-                <CardHeader>
-                  <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-                    <CardTitle className="flex items-center gap-2">
-                      <Calendar className="w-5 h-5 text-primary" />
-                      Appointments For The Day
-                    </CardTitle>
-                    <Input
-                      type="date"
-                      value={selectedDate}
-                      onChange={(e) => setSelectedDate(e.target.value)}
-                      className="w-full md:w-56"
-                    />
-                  </div>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  {appointmentsLoading && (
-                    <p className="text-sm text-muted-foreground">Loading appointments...</p>
-                  )}
-                  {!appointmentsLoading && dailyAppointments.length === 0 && (
-                    <p className="text-sm text-muted-foreground">No appointments for this date.</p>
-                  )}
-                  {!appointmentsLoading && dailyAppointments.map((appt) => (
-                    <div key={appt.id} className="rounded-lg border border-border/60 p-4">
-                      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
-                        <div>
-                          <p className="font-semibold">{appt.patientName || appt.patientId}</p>
-                          <p className="text-sm text-muted-foreground">
-                            {appt.patientId} • {appt.slotLabel}
-                          </p>
-                          <p className="text-xs text-muted-foreground mt-1">
-                            Status: <span className="capitalize">{appt.status}</span>
-                          </p>
-                        </div>
-                        <div className="flex gap-2">
-                          <Button
-                            size="sm"
-                            variant={appt.status === 'approved' ? 'success' : 'outline'}
-                            disabled={statusUpdatingId === appt.id}
-                            onClick={() => handleStatusChange(appt.id, 'approved')}
-                          >
-                            Approve
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant={appt.status === 'rejected' ? 'destructive' : 'outline'}
-                            disabled={statusUpdatingId === appt.id}
-                            onClick={() => handleStatusChange(appt.id, 'rejected')}
-                          >
-                            Reject
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </CardContent>
-              </Card>
-            </motion.div>
-
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.08 }}
-            >
-              <Card variant="glass">
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <Clock className="w-5 h-5 text-primary" />
-                    Upcoming Approved Visits
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  {upcomingApproved.length === 0 && (
-                    <p className="text-sm text-muted-foreground">No upcoming approved visits.</p>
-                  )}
-                  {upcomingApproved.map((appt) => (
-                    <div key={`upcoming-${appt.id}`} className="rounded-lg border border-border/60 p-3">
-                      <p className="font-medium">{appt.patientName || appt.patientId}</p>
-                      <p className="text-sm text-muted-foreground">
-                        {appt.date} • {appt.slotLabel}
-                      </p>
-                    </div>
-                  ))}
-                </CardContent>
-              </Card>
-            </motion.div>
 
             <motion.div
               initial={{ opacity: 0, y: 20 }}
