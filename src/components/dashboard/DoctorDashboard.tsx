@@ -16,6 +16,7 @@ import {
   Download,
   Clock,
   User,
+  Trash2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -423,6 +424,13 @@ const DoctorDashboard = ({ onLogout }: DoctorDashboardProps) => {
     setPrescriptionRows((rows) =>
       rows.map((row) => (row.id === rowId ? { ...row, [field]: value } : row))
     );
+  };
+
+  const removeMedicineRow = (rowId: string) => {
+    setPrescriptionRows((rows) => {
+      const next = rows.filter((r) => r.id !== rowId);
+      return next.length > 0 ? next : [createEmptyMedicine()];
+    });
   };
 
   const handleSavePrivateNote = async () => {
@@ -891,16 +899,14 @@ const DoctorDashboard = ({ onLogout }: DoctorDashboardProps) => {
                       <div key={row.id} className="rounded-lg border border-border/60 p-3 space-y-3">
                         <div className="flex items-center justify-between">
                           <p className="font-medium">Medicine {index + 1}</p>
-                          {prescriptionRows.length > 1 && (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => setPrescriptionRows((rows) => rows.filter((r) => r.id !== row.id))}
-                            >
-                              <Trash2 className="w-4 h-4 mr-1" />
-                              Remove
-                            </Button>
-                          )}
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => removeMedicineRow(row.id)}
+                          >
+                            <Trash2 className="w-4 h-4 mr-1" />
+                            Remove
+                          </Button>
                         </div>
                         <div className="grid md:grid-cols-2 gap-3">
                           <Input

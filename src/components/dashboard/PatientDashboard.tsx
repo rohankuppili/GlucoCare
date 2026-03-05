@@ -59,6 +59,11 @@ import {
   type NotificationDoc,
   type TimeSlotOption,
 } from '@/lib/firestore';
+import {
+  generateWeeklyDietPlan,
+  type DietPreference,
+  type WeeklyDietPlan,
+} from '@/lib/diet-plan-generator';
 import DashboardSettingsDialog from '@/components/settings/DashboardSettingsDialog';
 import { getDoctorForPatient } from '@/lib/roles';
 import { toast } from 'sonner';
@@ -86,6 +91,9 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
   const [openTrend, setOpenTrend] = useState<"bp" | "bpm" | "weight" | "hba1c" | null>(null);
   const [medicationReminderEnabled, setMedicationReminderEnabledState] = useState(true);
   const [medicationReminderSaving, setMedicationReminderSaving] = useState(false);
+  const [dietPreferenceByPlanId, setDietPreferenceByPlanId] = useState<Record<string, DietPreference>>({});
+  const [generatedDietByPlanId, setGeneratedDietByPlanId] = useState<Record<string, WeeklyDietPlan>>({});
+  const [generatingDietByPlanId, setGeneratingDietByPlanId] = useState<Record<string, boolean>>({});
   const alertsSectionRef = useRef<HTMLDivElement | null>(null);
 
   const patientName = patientProfile ? `${patientProfile.firstName} ${patientProfile.lastName}`.trim() : "";
@@ -240,6 +248,19 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
   const stats = useMemo(() => calculateGlucoseStats(chartReadings), [chartReadings]);
 
   const latestDaily = dailyMetrics[0];
+  const patientAge = useMemo(() => {
+    const dob = patientProfile?.dob;
+    if (!dob) return undefined;
+    const date = new Date(dob);
+    if (Number.isNaN(date.getTime())) return undefined;
+    const now = new Date();
+    let age = now.getFullYear() - date.getFullYear();
+    const monthDelta = now.getMonth() - date.getMonth();
+    if (monthDelta < 0 || (monthDelta === 0 && now.getDate() < date.getDate())) {
+      age -= 1;
+    }
+    return age >= 0 ? age : undefined;
+  }, [patientProfile?.dob]);
   const latestGlucoseValue = latestDaily?.postMealGlucose ?? latestDaily?.fastingGlucose;
   const glucoseStatus = latestGlucoseValue ? getGlucoseStatus(latestGlucoseValue) : 'normal';
 
@@ -439,6 +460,32 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
       toast.error("Failed to update reminder settings.");
     } finally {
       setMedicationReminderSaving(false);
+    }
+  };
+
+  const handleGenerateWeeklyDietPlan = async (
+    planId: string,
+    dietPlanText: string,
+    calorieLimit: number
+  ) => {
+    const preference = dietPreferenceByPlanId[planId] ?? "veg";
+    setGeneratingDietByPlanId((prev) => ({ ...prev, [planId]: true }));
+    try {
+      const weekly = await generateWeeklyDietPlan({
+        doctorRecommendation: dietPlanText,
+        calorieLimit,
+        age: patientAge,
+        weightKg: latestDaily?.weight,
+        dietPreference: preference,
+      });
+      setGeneratedDietByPlanId((prev) => ({ ...prev, [planId]: weekly }));
+      toast.success("AI weekly diet plan generated.");
+    } catch (error) {
+      const message =
+        (error as { message?: string })?.message ?? "Failed to generate AI diet plan.";
+      toast.error(message);
+    } finally {
+      setGeneratingDietByPlanId((prev) => ({ ...prev, [planId]: false }));
     }
   };
 
@@ -788,6 +835,63 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
                       <p className="text-sm text-muted-foreground">
                         Calorie limit: {plan.dietPlan.calorieLimit} kcal/day
                       </p>
+                      <div className="flex flex-col md:flex-row md:items-center gap-2">
+                        <select
+                          className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+                          value={dietPreferenceByPlanId[plan.id] ?? "veg"}
+                          onChange={(e) =>
+                            setDietPreferenceByPlanId((prev) => ({
+                              ...prev,
+                              [plan.id]: e.target.value as DietPreference,
+                            }))
+                          }
+                        >
+                          <option value="veg">Vegetarian</option>
+                          <option value="eggetarian">Eggetarian</option>
+                          <option value="non-veg">Non-veg</option>
+                        </select>
+                        <Button
+                          variant="outline"
+                          onClick={() =>
+                            void handleGenerateWeeklyDietPlan(
+                              plan.id,
+                              plan.dietPlan?.text ?? "",
+                              plan.dietPlan?.calorieLimit ?? 1600
+                            )
+                          }
+                          disabled={generatingDietByPlanId[plan.id]}
+                        >
+                          {generatingDietByPlanId[plan.id] ? "Generating..." : "Generate 1-Week Diet Plan"}
+                        </Button>
+                      </div>
+                      {(dietPreferenceByPlanId[plan.id] ?? "veg") === "non-veg" && (
+                        <p className="text-xs text-muted-foreground">
+                          Non-veg menu includes only chicken, mutton, seafood, eggs, and veg sides.
+                        </p>
+                      )}
+                      {generatedDietByPlanId[plan.id] && (
+                        <div className="rounded-md border border-border/60 bg-muted/30 p-3 space-y-3">
+                          <p className="text-sm font-medium">
+                            Generated weekly plan ({generatedDietByPlanId[plan.id].calorieTarget} kcal/day target)
+                          </p>
+                          {generatedDietByPlanId[plan.id].focusNotes.map((note, idx) => (
+                            <p key={`${plan.id}-focus-${idx}`} className="text-xs text-muted-foreground">
+                              {note}
+                            </p>
+                          ))}
+                          <div className="space-y-2">
+                            {generatedDietByPlanId[plan.id].days.map((day) => (
+                              <div key={`${plan.id}-${day.day}`} className="rounded-md border border-border/60 bg-background p-3">
+                                <p className="font-medium text-sm">{day.day}</p>
+                                <p className="text-xs mt-1"><span className="font-medium">Breakfast:</span> {day.breakfast} ({day.breakfastCalories} kcal)</p>
+                                <p className="text-xs mt-1"><span className="font-medium">Lunch:</span> {day.lunch} ({day.lunchCalories} kcal)</p>
+                                <p className="text-xs mt-1"><span className="font-medium">Dinner:</span> {day.dinner} ({day.dinnerCalories} kcal)</p>
+                                <p className="text-xs mt-2 text-muted-foreground">Total: {day.totalCalories} kcal</p>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                       {plan.dietPlan.imageUrl && (
                         <img
                           src={plan.dietPlan.imageUrl}

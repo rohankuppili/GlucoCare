@@ -825,14 +825,6 @@ function buildMedicationEmailContent(job: MedicationReminderEmailJobDoc): {
 async function fetchPatientReminderMedicines(
   patientUid: string
 ): Promise<{ patientName: string; patientEmail: string; medicines: PrescriptionMedicineInput[] }> {
-  const userSnap = await getDoc(doc(db, "users", patientUid));
-  const userData = (userSnap.exists() ? userSnap.data() : {}) as Record<string, unknown>;
-  const patientName = `${String(userData.firstName ?? "")} ${String(userData.lastName ?? "")}`.trim();
-  const patientEmail = String(userData.email ?? "").trim();
-  if (!patientEmail) {
-    throw new Error("Patient email address is missing.");
-  }
-
   const planSnap = await getDocs(
     query(carePlansRef, where("patientUid", "==", patientUid), where("type", "==", "prescription"))
   );
@@ -854,7 +846,20 @@ async function fetchPatientReminderMedicines(
       });
     }
   }
-  return { patientName: patientName || "Patient", patientEmail, medicines: Array.from(byMedicine.values()) };
+  const medicines = Array.from(byMedicine.values());
+  if (medicines.length === 0) {
+    return { patientName: "Patient", patientEmail: "", medicines };
+  }
+
+  const userSnap = await getDoc(doc(db, "users", patientUid));
+  const userData = (userSnap.exists() ? userSnap.data() : {}) as Record<string, unknown>;
+  const patientName = `${String(userData.firstName ?? "")} ${String(userData.lastName ?? "")}`.trim();
+  const patientEmail = String(userData.email ?? "").trim();
+  if (!patientEmail) {
+    throw new Error("Patient email address is missing.");
+  }
+
+  return { patientName: patientName || "Patient", patientEmail, medicines };
 }
 
 export async function getMedicationReminderSettings(uid: string): Promise<MedicationReminderSettingsDoc> {
@@ -888,7 +893,10 @@ export async function syncMedicationReminderJobsForPatient(
   if (!settings.enabled) return 0;
 
   const { patientEmail, patientName, medicines } = await fetchPatientReminderMedicines(patientUid);
-  if (medicines.length === 0) return 0;
+  if (medicines.length === 0) {
+    await disableMedicationReminderJobsForPatient(patientUid);
+    return 0;
+  }
 
   const medicationsBySlot = new Map<MedicationReminderSlot, Array<{ name: string; dosage: string }>>();
   for (const med of medicines) {
@@ -1066,10 +1074,6 @@ export async function createPrescriptionPlan(input: CreatePrescriptionInput): Pr
     }))
     .filter((m) => m.name && m.dosage);
 
-  if (medicines.length === 0) {
-    throw new Error("Add at least one medicine with name and dosage.");
-  }
-
   const existing = await getDocs(
     query(
       carePlansRef,
@@ -1078,6 +1082,14 @@ export async function createPrescriptionPlan(input: CreatePrescriptionInput): Pr
       where("type", "==", "prescription")
     )
   );
+
+  if (medicines.length === 0) {
+    if (!existing.empty) {
+      await Promise.all(existing.docs.map((d) => deleteDoc(d.ref)));
+    }
+    await disableMedicationReminderJobsForPatient(input.patientUid);
+    return;
+  }
 
   const payload = {
     type: "prescription" as DoctorCarePlanType,
