@@ -818,7 +818,7 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
             </Button>
             <Button variant="outline" className="w-full sm:w-auto" onClick={() => void handleFindNearbyHospitals()} disabled={hospitalsLoading}>
               <MapPin className="w-5 h-5 mr-2" />
-              {hospitalsLoading ? "Finding nearby hospitals..." : "Find Nearby Diabetes Hospitals (AI)"}
+              {hospitalsLoading ? "Finding nearby hospitals..." : "Find Nearby Diabetes Hospitals"}
             </Button>
           </div>
         </motion.div>
@@ -833,7 +833,7 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <MapPin className="w-5 h-5 text-primary" />
-                Nearest Diabetes Hospitals (AI)
+                Nearest Diabetes Hospitals
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
@@ -847,7 +847,7 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
               )}
               {!hospitalLookupError && nearbyHospitals.length === 0 && (
                 <p className="text-sm text-muted-foreground">
-                  Tap "Find Nearby Diabetes Hospitals (AI)" to load hospitals around your current location.
+                  Tap "Find Nearby Diabetes Hospitals" to load hospitals around your current location.
                 </p>
               )}
               {nearbyHospitals.map((hospital, index) => {
@@ -1063,96 +1063,6 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
             </CardContent>
           </Card>
         </motion.div>
-
-        {/* Quick Actions */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.3 }}
-          className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8"
-        >
-          {[
-            { icon: Droplets, label: 'Log Glucose', color: 'bg-primary', onClick: () => toast.info("Use 'Log Daily Health' to save glucose.") },
-            { icon: Utensils, label: 'Log Meal', color: 'bg-success', onClick: () => toast.info("Meal logging will be added in a future update.") },
-            {
-              icon: Footprints,
-              label: 'Log Activity',
-              color: 'bg-warning',
-              onClick: () => {
-                setShowActivityActions(true);
-                setActivityLogOpen(true);
-              },
-            },
-            { icon: Heart, label: 'Log Vitals', color: 'bg-accent', onClick: () => toast.info("Use 'Log Daily Health' to save vitals.") },
-          ].map((action) => (
-            <Card
-              key={action.label}
-              variant="glass"
-              className="cursor-pointer hover:shadow-glow transition-all duration-300 group"
-              onClick={action.onClick}
-            >
-              <CardContent className="p-6 flex flex-col items-center text-center">
-                <div className={`w-14 h-14 rounded-2xl ${action.color} flex items-center justify-center mb-3 group-hover:scale-110 transition-transform`}>
-                  <action.icon className="w-7 h-7 text-primary-foreground" />
-                </div>
-                <span className="text-lg font-semibold">{action.label}</span>
-              </CardContent>
-            </Card>
-          ))}
-        </motion.div>
-
-        {showActivityActions && (
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.32 }}
-            className="mb-8"
-          >
-            <Card variant="glass">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Footprints className="w-5 h-5 text-warning" />
-                  Activity Tracker
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <div className="flex flex-wrap gap-3">
-                  <Button variant="hero" onClick={() => setActivityLogOpen(true)}>
-                    Log Activity
-                  </Button>
-                  <Button variant="outline" onClick={() => setShowActivityLogsPanel((prev) => !prev)}>
-                    {showActivityLogsPanel ? "Hide Graph/Logs" : "View Graph/Logs"}
-                  </Button>
-                </div>
-                <p className="text-sm text-muted-foreground">
-                  Latest calories burned: {latestCaloriesBurned === '--' ? '--' : `${latestCaloriesBurned} kcal`}
-                </p>
-                {showActivityLogsPanel && (
-                  <div className="space-y-4 pt-2">
-                    <ActivityCaloriesChart data={activityLogs.slice(0, 30)} />
-                    <div className="space-y-2">
-                      <p className="text-sm font-medium">Recent activity logs</p>
-                      {activityLogsLoading && (
-                        <p className="text-sm text-muted-foreground">Loading activity logs...</p>
-                      )}
-                      {!activityLogsLoading && activityLogs.length === 0 && (
-                        <p className="text-sm text-muted-foreground">No activity logs yet.</p>
-                      )}
-                      {activityLogs.slice(0, 7).map((log) => (
-                        <div key={log.id} className="rounded-md border border-border/60 p-3 text-sm">
-                          <p className="font-medium">{log.caloriesBurned} kcal burned</p>
-                          <p className="text-xs text-muted-foreground">
-                            {log.date} ({log.source === "quick-action" ? "Log Activity" : "Log Daily Health"})
-                          </p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </motion.div>
-        )}
 
         <motion.div
           initial={{ opacity: 0, y: 20 }}
