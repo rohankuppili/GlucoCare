@@ -8,7 +8,8 @@
     "build": "vite build",
     "build:dev": "vite build --mode development",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "train:model:diabetes": "python tools/train_diabetes_rf.py --data \"C:\\Users\\rohan\\Downloads\\archive (1)\\diabetes_prediction_dataset.csv\""
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",

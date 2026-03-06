@@ -45,3 +45,30 @@ The app will be available at:
 - React
 - shadcn/ui
 - Tailwind CSS
+
+## Custom Diabetes Risk Model (Random Forest)
+
+This project now includes a manually trained Random Forest model for:
+
+- Diabetes risk score prediction
+- 30-day risk trend projection
+- Action recommendations based on risk-impact simulation
+
+### Train / retrain model
+
+Default command:
+
+```sh
+npm run train:model:diabetes
+```
+
+Or with your own dataset path:
+
+```sh
+python tools/train_diabetes_rf.py --data "C:\path\to\diabetes_prediction_dataset.csv"
+```
+
+Generated artifacts:
+
+- `src/lib/generated/diabetes-rf-model.ts` (runtime model used by app)
+- `model-artifacts/diabetes-rf-report.md` (training metrics report)

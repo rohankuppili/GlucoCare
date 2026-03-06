@@ -17,7 +17,8 @@ import {
   ChevronRight,
   Phone,
   LogOut,
-  User
+  User,
+  MapPin
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -74,13 +75,34 @@ import {
   generateWeeklyWorkoutPlan,
   type WeeklyWorkoutPlan,
 } from '@/lib/workout-plan-generator';
+import {
+  generateNearbyHospitalsFromAi,
+  type NearbyHospitalResult,
+} from '@/lib/nearby-hospital-generator';
+import { summarizeDiabetesRisk } from '@/lib/diabetes-risk';
 import DashboardSettingsDialog from '@/components/settings/DashboardSettingsDialog';
-import { getDoctorForPatient } from '@/lib/roles';
+import { getDoctorForPatient, getFamilyMemberForPatient } from '@/lib/roles';
 import { toast } from 'sonner';
 import LogDailyHealthDialog from '@/components/health/LogDailyHealthDialog';
 
 interface PatientDashboardProps {
   onLogout: () => void;
+}
+
+interface LatLngCoords {
+  lat: number;
+  lng: number;
+}
+
+function formatDistance(distanceKm: number): string {
+  if (!Number.isFinite(distanceKm)) return "--";
+  if (distanceKm < 1) return `${Math.round(distanceKm * 1000)} m`;
+  return `${distanceKm.toFixed(1)} km`;
+}
+
+function buildTelHref(phone: string): string | null {
+  const normalized = phone.replace(/[^+\d]/g, "");
+  return normalized ? `tel:${normalized}` : null;
 }
 
 const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
@@ -94,7 +116,8 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
   const [appointments, setAppointments] = useState<AppointmentDoc[]>([]);
   const [notifications, setNotifications] = useState<NotificationDoc[]>([]);
   const [doctorCarePlans, setDoctorCarePlans] = useState<DoctorCarePlanDoc[]>([]);
-  const [doctorDetails, setDoctorDetails] = useState<{ uid: string; doctorId: string; name: string } | null>(null);
+  const [doctorDetails, setDoctorDetails] = useState<{ uid: string; doctorId: string; name: string; phone: string } | null>(null);
+  const [caretakerDetails, setCaretakerDetails] = useState<{ name: string; phone: string } | null>(null);
   const [appointmentDate, setAppointmentDate] = useState(() => new Date().toISOString().split('T')[0]);
   const [appointmentTime, setAppointmentTime] = useState("");
   const [availableSlots, setAvailableSlots] = useState<TimeSlotOption[]>(buildDayTimeSlots());
@@ -113,6 +136,11 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
   const [activityLogOpen, setActivityLogOpen] = useState(false);
   const [activityCaloriesInput, setActivityCaloriesInput] = useState("");
   const [savingActivityLog, setSavingActivityLog] = useState(false);
+  const [sosOpen, setSosOpen] = useState(false);
+  const [currentLocation, setCurrentLocation] = useState<LatLngCoords | null>(null);
+  const [hospitalsLoading, setHospitalsLoading] = useState(false);
+  const [nearbyHospitals, setNearbyHospitals] = useState<NearbyHospitalResult[]>([]);
+  const [hospitalLookupError, setHospitalLookupError] = useState<string>("");
   const alertsSectionRef = useRef<HTMLDivElement | null>(null);
 
   const patientName = patientProfile ? `${patientProfile.firstName} ${patientProfile.lastName}`.trim() : "";
@@ -184,7 +212,10 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
             uid: doctor.uid,
             doctorId: doctor.doctorId,
             name: `${doctor.firstName} ${doctor.lastName}`.trim() || doctor.doctorId,
+            phone: doctor.phone ?? "",
           });
+        } else if (!cancelled) {
+          setDoctorDetails(null);
         }
       } catch (error) {
         if (!cancelled) toast.error("Failed to load linked doctor.");
@@ -192,6 +223,35 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
     }
 
     loadDoctor();
+    return () => {
+      cancelled = true;
+    };
+  }, [patientProfile?.patientId]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadCaretaker() {
+      if (!patientProfile?.patientId) {
+        setCaretakerDetails(null);
+        return;
+      }
+      try {
+        const family = await getFamilyMemberForPatient(patientProfile.patientId);
+        if (!cancelled && family) {
+          setCaretakerDetails({
+            name: `${family.firstName} ${family.lastName}`.trim() || "Caretaker",
+            phone: family.phone ?? "",
+          });
+        } else if (!cancelled) {
+          setCaretakerDetails(null);
+        }
+      } catch {
+        if (!cancelled) setCaretakerDetails(null);
+      }
+    }
+
+    loadCaretaker();
     return () => {
       cancelled = true;
     };
@@ -307,6 +367,10 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
     latestDaily?.caloriesBurned ??
     '--';
   const unreadNotifications = notifications.filter((n) => !n.isRead).length;
+  const doctorCallHref = doctorDetails?.phone ? buildTelHref(doctorDetails.phone) : null;
+  const caretakerCallHref = caretakerDetails?.phone ? buildTelHref(caretakerDetails.phone) : null;
+  const ambulanceCallHref = "tel:108";
+  const sosHospitals = nearbyHospitals.slice(0, 3);
   const hba1cReadings = useMemo(() => {
     const patientId = patientProfile?.patientId ?? user?.uid ?? "";
     return dailyMetrics
@@ -351,6 +415,15 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
       .slice(-30)
       .map(([date, value]) => ({ date, value }));
   }, [activityLogs, dailyMetrics]);
+
+  const diabetesRiskSummary = useMemo(
+    () =>
+      summarizeDiabetesRisk(dailyMetrics, {
+        age: patientAge,
+        latestWeightKg: latestDaily?.weight,
+      }),
+    [dailyMetrics, latestDaily?.weight, patientAge]
+  );
 
   const panelAlerts = useMemo<Alert[]>(() => {
     const patientId = patientProfile?.patientId ?? user?.uid ?? "";
@@ -407,8 +480,41 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
       });
     }
 
+    if (diabetesRiskSummary) {
+      const currentRiskPct = Math.round(diabetesRiskSummary.riskScore * 100);
+      const projectedRiskPct = Math.round(diabetesRiskSummary.projected30DayRisk * 100);
+      const trendText =
+        diabetesRiskSummary.trendLabel === "improving"
+          ? "improving"
+          : diabetesRiskSummary.trendLabel === "worsening"
+            ? "worsening"
+            : "stable";
+
+      items.push({
+        id: "insight-rf-risk-score",
+        patientId,
+        type: "prediction",
+        category: "glucose",
+        title: "Custom RF Diabetes Risk Score",
+        description: `Current risk score: ${currentRiskPct}% (${diabetesRiskSummary.riskBand}). Model confidence ${Math.round(diabetesRiskSummary.confidence * 100)}%.`,
+        timestamp: new Date().toISOString(),
+        confidence: diabetesRiskSummary.confidence,
+        actionItems: diabetesRiskSummary.recommendations,
+      });
+
+      items.push({
+        id: "insight-rf-risk-trend",
+        patientId,
+        type: "trend",
+        category: "lifestyle",
+        title: "30-Day Risk Trajectory",
+        description: `Risk trend is ${trendText}. Projected 30-day risk: ${projectedRiskPct}% based on recent logs.`,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
     return items;
-  }, [latestDaily?.bloodPressureDiastolic, latestDaily?.bloodPressureSystolic, latestDaily?.heartRate, patientProfile?.patientId, stats.average, stats.inRangePercentage, stats.readings, user?.uid]);
+  }, [diabetesRiskSummary, latestDaily?.bloodPressureDiastolic, latestDaily?.bloodPressureSystolic, latestDaily?.heartRate, patientProfile?.patientId, stats.average, stats.inRangePercentage, stats.readings, user?.uid]);
 
   useEffect(() => {
     let cancelled = false;
@@ -500,6 +606,56 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
 
   const handleBellClick = () => {
     alertsSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  const resolveCurrentLocation = async (): Promise<LatLngCoords> =>
+    new Promise<LatLngCoords>((resolve, reject) => {
+      if (!navigator.geolocation) {
+        reject(new Error("Geolocation is not supported on this device."));
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(
+        (position) =>
+          resolve({
+            lat: position.coords.latitude,
+            lng: position.coords.longitude,
+          }),
+        () => reject(new Error("Please allow location access to find nearby hospitals.")),
+        {
+          enableHighAccuracy: true,
+          timeout: 15000,
+          maximumAge: 60000,
+        }
+      );
+    });
+
+  const handleFindNearbyHospitals = async () => {
+    setHospitalsLoading(true);
+    setHospitalLookupError("");
+    try {
+      const coords = await resolveCurrentLocation();
+      setCurrentLocation(coords);
+      const hospitals = await generateNearbyHospitalsFromAi(coords.lat, coords.lng, 5);
+      setNearbyHospitals(hospitals);
+      if (hospitals.length === 0) {
+        setHospitalLookupError("No nearby diabetes hospitals found for your location.");
+      }
+    } catch (error: unknown) {
+      console.error("Nearby hospital lookup failed:", error);
+      const message = (error as { message?: string })?.message ?? "Unable to fetch nearby hospitals via AI.";
+      setHospitalLookupError(message);
+      toast.error(message);
+    } finally {
+      setHospitalsLoading(false);
+    }
+  };
+
+  const callNumber = (href: string | null, fallbackMessage: string) => {
+    if (!href) {
+      toast.error(fallbackMessage);
+      return;
+    }
+    window.location.href = href;
   };
 
   const handleMedicationReminderToggle = async (enabled: boolean) => {
@@ -655,10 +811,78 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
           animate={{ opacity: 1, scale: 1 }}
           className="mb-8"
         >
-          <Button variant="sos" className="w-full sm:w-auto">
-            <Phone className="w-8 h-8 mr-3" />
-            Emergency SOS
-          </Button>
+          <div className="flex flex-col sm:flex-row gap-3">
+            <Button variant="sos" className="w-full sm:w-auto" onClick={() => setSosOpen(true)}>
+              <Phone className="w-8 h-8 mr-3" />
+              Emergency SOS
+            </Button>
+            <Button variant="outline" className="w-full sm:w-auto" onClick={() => void handleFindNearbyHospitals()} disabled={hospitalsLoading}>
+              <MapPin className="w-5 h-5 mr-2" />
+              {hospitalsLoading ? "Finding nearby hospitals..." : "Find Nearby Diabetes Hospitals (AI)"}
+            </Button>
+          </div>
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.05 }}
+          className="mb-8"
+        >
+          <Card variant="glass">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <MapPin className="w-5 h-5 text-primary" />
+                Nearest Diabetes Hospitals (AI)
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {currentLocation && (
+                <p className="text-xs text-muted-foreground">
+                  Current location: {currentLocation.lat.toFixed(5)}, {currentLocation.lng.toFixed(5)}
+                </p>
+              )}
+              {hospitalLookupError && (
+                <p className="text-sm text-destructive">{hospitalLookupError}</p>
+              )}
+              {!hospitalLookupError && nearbyHospitals.length === 0 && (
+                <p className="text-sm text-muted-foreground">
+                  Tap "Find Nearby Diabetes Hospitals (AI)" to load hospitals around your current location.
+                </p>
+              )}
+              {nearbyHospitals.map((hospital, index) => {
+                const callHref = buildTelHref(hospital.phone);
+                return (
+                  <div key={hospital.id} className="rounded-lg border border-border/60 p-3">
+                    <p className="font-medium">
+                      {index + 1}. {hospital.name}
+                    </p>
+                    <p className="text-sm text-muted-foreground">{hospital.address}</p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Distance: {formatDistance(hospital.distanceKm)}
+                    </p>
+                    <div className="flex flex-wrap gap-2 mt-2">
+                      {callHref ? (
+                        <a href={callHref}>
+                          <Button size="sm" variant="hero">
+                            <Phone className="w-4 h-4 mr-1" />
+                            Call
+                          </Button>
+                        </a>
+                      ) : (
+                        <Button size="sm" variant="outline" disabled>
+                          Phone unavailable
+                        </Button>
+                      )}
+                      <a href={hospital.mapsUrl} target="_blank" rel="noreferrer">
+                        <Button size="sm" variant="outline">Open in Maps</Button>
+                      </a>
+                    </div>
+                  </div>
+                );
+              })}
+            </CardContent>
+          </Card>
         </motion.div>
 
         {/* Current Glucose Status - Large Display */}
@@ -1225,6 +1449,84 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
         >
           <InsightsPanel insights={derivedInsights} />
         </motion.div>
+
+        <Dialog open={sosOpen} onOpenChange={setSosOpen}>
+          <DialogContent className="max-w-xl">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2 text-danger">
+                <Phone className="w-5 h-5" />
+                Emergency SOS Contacts
+              </DialogTitle>
+              <DialogDescription>
+                Quick call options for medical emergencies.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-3">
+              <Button
+                className="w-full justify-start"
+                variant="outline"
+                onClick={() => callNumber(doctorCallHref, "Doctor number is not available.")}
+              >
+                <Phone className="w-4 h-4 mr-2" />
+                {doctorDetails ? `Call Linked Doctor (${doctorDetails.name})` : "Call Linked Doctor"}
+              </Button>
+
+              <Button
+                className="w-full justify-start"
+                variant="outline"
+                onClick={() => callNumber(caretakerCallHref, "Caretaker number is not available.")}
+              >
+                <Phone className="w-4 h-4 mr-2" />
+                {caretakerDetails ? `Call Caretaker (${caretakerDetails.name})` : "Call Caretaker"}
+              </Button>
+
+              <Button
+                className="w-full justify-start"
+                variant="outline"
+                onClick={() => callNumber(ambulanceCallHref, "Ambulance number is unavailable.")}
+              >
+                <Phone className="w-4 h-4 mr-2" />
+                Call Ambulance (108)
+              </Button>
+
+              <div className="pt-1 space-y-2">
+                <p className="text-sm font-medium">Nearest 3 hospitals</p>
+                {sosHospitals.length === 0 && (
+                  <p className="text-sm text-muted-foreground">
+                    Load nearby hospitals first, then you can call the nearest 3 from here.
+                  </p>
+                )}
+                {sosHospitals.map((hospital, idx) => (
+                  <Button
+                    key={`${hospital.id}-sos`}
+                    className="w-full justify-start"
+                    variant="outline"
+                    onClick={() =>
+                      callNumber(
+                        buildTelHref(hospital.phone),
+                        `${hospital.name} phone number is not available.`
+                      )
+                    }
+                  >
+                    <Phone className="w-4 h-4 mr-2" />
+                    {idx + 1}. {hospital.name} ({formatDistance(hospital.distanceKm)})
+                  </Button>
+                ))}
+              </div>
+            </div>
+
+            <DialogFooter>
+              <Button variant="outline" onClick={() => void handleFindNearbyHospitals()} disabled={hospitalsLoading}>
+                <MapPin className="w-4 h-4 mr-2" />
+                {hospitalsLoading ? "Refreshing hospitals..." : "Refresh nearby hospitals"}
+              </Button>
+              <Button variant="hero" onClick={() => setSosOpen(false)}>
+                Close
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         <Dialog open={openTrend !== null} onOpenChange={(open) => { if (!open) setOpenTrend(null); }}>
           <DialogContent className="max-w-3xl">
