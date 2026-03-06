@@ -771,7 +771,14 @@ const PatientDashboard = ({ onLogout }: PatientDashboardProps) => {
               </div>
               <div>
                 <p className="text-muted-foreground">{getGreeting()},</p>
-                <h1 className="text-2xl font-bold">{roleLoading ? "Loading..." : (patientName || "Patient")}</h1>
+                <h1 className="text-2xl font-bold">
+                  {roleLoading ? "Loading..." : (patientName || "Patient")}
+                  {!!patientProfile?.patientId && (
+                    <span className="ml-2 text-sm font-normal text-muted-foreground">
+                      ({patientProfile.patientId})
+                    </span>
+                  )}
+                </h1>
               </div>
             </div>
 

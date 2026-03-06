@@ -551,7 +551,14 @@ const DoctorDashboard = ({ onLogout }: DoctorDashboardProps) => {
               </div>
               <div>
                 <p className="text-muted-foreground">Welcome back,</p>
-                <h1 className="text-2xl font-bold">{loading ? "Loading..." : (doctorName || "Doctor")}</h1>
+                <h1 className="text-2xl font-bold">
+                  {loading ? "Loading..." : (doctorName || "Doctor")}
+                  {!!doctorProfile?.doctorId && (
+                    <span className="ml-2 text-sm font-normal text-muted-foreground">
+                      ({doctorProfile.doctorId})
+                    </span>
+                  )}
+                </h1>
               </div>
             </div>
 
@@ -746,11 +753,17 @@ const DoctorDashboard = ({ onLogout }: DoctorDashboardProps) => {
                         <User className="w-8 h-8 text-primary" />
                       </div>
                       <div>
-                        <h2 className="text-2xl font-bold">{selectedPatient?.name ?? (loading ? "Loading..." : "No linked patient")}</h2>
+                        <h2 className="text-2xl font-bold">
+                          {selectedPatient?.name ?? (loading ? "Loading..." : "No linked patient")}
+                          {!!selectedPatient?.id && (
+                            <span className="ml-2 text-sm font-normal text-muted-foreground">
+                              ({selectedPatient.id})
+                            </span>
+                          )}
+                        </h2>
                         <p className="text-muted-foreground">
                           {selectedPatient ? "" : "Link patients to see them here."}
                         </p>
-                        <p className="text-sm text-muted-foreground">ID: {selectedPatient?.id ?? "â€”"}</p>
                       </div>
                     </div>
 
